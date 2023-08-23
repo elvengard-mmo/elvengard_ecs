@@ -3,39 +3,53 @@ defmodule ElvenGard.ECS.Entity do
   TODO: Documentation for ElvenGard.ECS.Entity
   """
 
+  import ElvenGard.ECS, only: [is_entity: 1]
+
+  alias __MODULE__
   alias ElvenGard.ECS.UUID
+  alias ElvenGard.ECS.Config
 
-  defmacro __using__(opts) do
-    components = opts[:components] || raise "components opt is mantatory"
+  @type t :: struct()
 
+  @type id :: String.t() | integer()
+  @type entity_spec :: %{
+          id: id(),
+          components: [module()],
+          children: [Entity.t()],
+          parents: [Entity.t()]
+        }
+
+  @callback new(Keyword.t()) :: entity_spec()
+
+  # Public API
+
+  @doc false
+  defmacro __using__(_opts) do
     quote location: :keep do
-      import unquote(__MODULE__), only: [def_introspection: 0, def_new: 0]
+      @behaviour unquote(__MODULE__)
 
+      @derive {Inspect, only: [:id]}
       @enforce_keys [:id]
-      defstruct [:id]
-
-      @components unquote(components)
-
-      unquote(def_introspection())
-      unquote(def_new())
+      defstruct [:id, __type__: :entity]
     end
   end
 
-  ## Internal API
+  @spec entity_spec(Keyword.t()) :: entity_spec()
+  def entity_spec(opts \\ []) do
+    default = %{
+      id: UUID.uuid4(),
+      components: [],
+      children: [],
+      parents: []
+    }
 
-  def def_introspection() do
-    quote location: :keep, unquote: false do
-      def __type__(), do: :entity
-      def __components__(), do: unquote(@components)
-    end
+    Map.merge(default, Map.new(opts))
   end
 
-  def def_new() do
-    quote location: :keep, unquote: false do
-      def new(id \\ nil) do
-        id = if is_nil(id), do: UUID.uuid4(), else: id
-        %__MODULE__{id: id}
-      end
-    end
+  @doc """
+  TODO: Documentation
+  """
+  def spawn(entity_module, opts) when is_atom(entity_module) do
+    Config.backend().spawn_entity(entity_module, opts)
   end
 end

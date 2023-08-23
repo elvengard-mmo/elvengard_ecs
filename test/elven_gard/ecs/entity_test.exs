@@ -1,27 +1,34 @@
 defmodule ElvenGard.ECS.EntityTest do
   use ExUnit.Case, async: true
 
-  defmodule FirstEntity do
-    use ElvenGard.ECS.Entity, components: []
+  alias ElvenGard.ECS.Entity
+
+  test "define entity_spec/0 and entity_spec/1" do
+    specs = Entity.entity_spec()
+
+    assert is_map(specs)
+    assert is_binary(specs.id)
+    assert is_list(specs.components)
+    assert is_list(specs.parents)
+    assert is_list(specs.children)
   end
 
-  test "define introspection helpers" do
-    assert FirstEntity.__type__() == :entity
-    assert FirstEntity.__components__() == []
-  end
+  defmodule SimpleEntity do
+    use ExUnit.Case, async: true
+    use ElvenGard.ECS.Entity
 
-  test "define a structure" do
-    assert function_exported?(FirstEntity, :__struct__, 0)
-    assert %FirstEntity{id: nil} = FirstEntity.__struct__()
-  end
+    alias ElvenGard.ECS.Entity
 
-  test "define new/0 and new/1" do
-    assert %FirstEntity{id: id} = FirstEntity.new()
-    assert is_binary(id)
+    @impl true
+    def new(_opts) do
+      Entity.entity_spec()
+    end
 
-    assert %FirstEntity{id: id2} = FirstEntity.new()
-    assert id != id2
+    ## Tests
 
-    assert %FirstEntity{id: 123} = FirstEntity.new(123)
+    test "define a structure" do
+      assert function_exported?(SimpleEntity, :__struct__, 0)
+      assert %SimpleEntity{id: nil, __type__: :entity} = SimpleEntity.__struct__()
+    end
   end
 end

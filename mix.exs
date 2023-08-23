@@ -3,13 +3,15 @@ defmodule ElvenGard.ECS.MixProject do
 
   @app_name "ElvenGard.ECS"
   @version "0.1.0"
-  @github_link "https://github.com/ImNotAVirus/elvengard_ecs"
+  # @github_link "https://github.com/ImNotAVirus/elvengard_ecs"
 
   def project do
     [
-      app: :elvengard_network,
+      app: :elvengard_ecs,
       version: @version,
       elixir: "~> 1.13",
+      start_permanent: Mix.env() == :prod,
+      consolidate_protocols: Mix.env() != :test,
       name: @app_name,
       description: "Game server toolkit written in Elixir # ECS",
       deps: deps()
@@ -19,7 +21,8 @@ defmodule ElvenGard.ECS.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :crypto]
+      extra_applications: [:logger, :crypto],
+      mod: {ElvenGard.ECS.Application, []}
     ]
   end
 
