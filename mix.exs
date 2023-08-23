@@ -11,7 +11,6 @@ defmodule ElvenGard.ECS.MixProject do
       version: @version,
       elixir: "~> 1.13",
       start_permanent: Mix.env() == :prod,
-      consolidate_protocols: Mix.env() != :test,
       name: @app_name,
       description: "Game server toolkit written in Elixir # ECS",
       deps: deps()
