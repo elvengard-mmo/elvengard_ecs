@@ -36,4 +36,12 @@ defmodule ElvenGard.ECS.Query do
   def parent(%Entity{} = entity) do
     Config.backend().parent(entity)
   end
+
+  @doc """
+  TODO: Documentation
+  """
+  @spec children(Entity.t()) :: {:ok, [Entity.t()]}
+  def children(%Entity{} = entity) do
+    Config.backend().children(entity)
+  end
 end
