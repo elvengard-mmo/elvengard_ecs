@@ -5,7 +5,6 @@ defmodule ElvenGard.ECS.Entity do
 
   alias __MODULE__
   alias ElvenGard.ECS.UUID
-  alias ElvenGard.ECS.Config
 
   @type id :: String.t() | integer()
   @type t :: %Entity{id: id()}
@@ -37,21 +36,5 @@ defmodule ElvenGard.ECS.Entity do
     }
 
     Map.merge(default, Map.new(opts))
-  end
-
-  @doc """
-  TODO: Documentation
-  """
-  @spec spawn(entity_spec()) :: {:ok, t()} | {:error, :already_spawned}
-  def spawn(specs) do
-    Config.backend().spawn_entity(specs)
-  end
-
-  @doc """
-  TODO: Documentation
-  """
-  @spec fetch(id()) :: {:ok, t()} | {:error, :not_found}
-  def fetch(id) do
-    Config.backend().fetch_entity(id)
   end
 end

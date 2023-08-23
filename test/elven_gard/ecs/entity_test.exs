@@ -17,34 +17,4 @@ defmodule ElvenGard.ECS.EntityTest do
     assert is_nil(specs.parent)
     assert is_list(specs.children)
   end
-
-  defmodule SimpleEntity do
-    use ExUnit.Case, async: true
-
-    alias ElvenGard.ECS.Entity
-
-    @behaviour ElvenGard.ECS.Entity
-
-    @impl true
-    def new(_opts \\ []), do: Entity.entity_spec()
-
-    ## Tests
-
-    test "can be spawned" do
-      specs = new()
-
-      assert {:ok, %Entity{} = entity} = Entity.spawn(specs)
-      assert specs.id == entity.id
-
-      assert {:error, :already_spawned} = Entity.spawn(specs)
-    end
-
-    test "can be fetched" do
-      specs = new()
-      {:ok, entity} = Entity.spawn(specs)
-
-      assert {:ok, ^entity} = Entity.fetch(specs.id)
-      assert {:error, :not_found} = Entity.fetch("<unknown>")
-    end
-  end
 end
