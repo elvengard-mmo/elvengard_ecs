@@ -110,19 +110,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
-  @spec fetch_component(Entity.t(), module()) :: {:ok, Component.t()} | {:error, :not_found}
-  def fetch_component(%Entity{id: owner_id} = entity, component) do
+  @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
+  def fetch_components(%Entity{id: owner_id} = entity, component) do
     # TODO: Generate the select query
     match = {Component, :"$1", :"$2", :"$3"}
     guards = [{:==, :"$1", component}, {:==, :"$2", owner_id}]
     result = [:"$3"]
     query = [{match, guards, result}]
 
-    case :mnesia.dirty_select(Component, query) do
-      [] -> {:error, :not_found}
-      [component] -> {:ok, component}
-      _ -> raise "#{inspect(entity)} have more that 1 component of type #{inspect(component)}"
-    end
+    {:ok, :mnesia.dirty_select(Component, query)}
   end
 
   ## Internal API

@@ -72,7 +72,7 @@ defmodule ElvenGard.ECS.QueryTest do
     test "returns an empty list if entity doesn't exists" do
       # If the parent entity doesn't exists, it returns an empty list
       # This is a design choice to focus on performance
-      # For concistency, the system should check that the parent exists with
+      # For concistency, the System should check that the parent exists with
       # fetch_entity/1
       assert {:ok, []} = Query.children(invalid_entity())
     end
@@ -114,6 +114,10 @@ defmodule ElvenGard.ECS.QueryTest do
     use ElvenGard.ECS.Component, state: [map_id: 1, pos_x: 0, pos_y: 0]
   end
 
+  defmodule BuffComponent do
+    use ElvenGard.ECS.Component, state: [buff_id: nil]
+  end
+
   describe "components/1" do
     test "returns a list of components for an Entity" do
       entity = spawn_entity()
@@ -137,14 +141,42 @@ defmodule ElvenGard.ECS.QueryTest do
     test "returns an empty list if entity doesn't exists" do
       # If the parent entity doesn't exists, it returns an empty list
       # This is a design choice to focus on performance
-      # For concistency, the system should check that the parent exists with
+      # For concistency, the System should check that the parent exists with
       # fetch_entity/1
       assert {:ok, []} = Query.components(invalid_entity())
     end
   end
 
+  describe "fetch_components/2" do
+    test "returns a list of components by it's module name" do
+      components = [
+        {PlayerComponent, []},
+        {BuffComponent, [buff_id: 1]},
+        {BuffComponent, [buff_id: 2]}
+      ]
+
+      player = spawn_entity(components: components)
+
+      assert {:ok, [player_component]} = Query.fetch_components(player, PlayerComponent)
+      assert %PlayerComponent{name: "Player"} = player_component
+
+      assert {:ok, [buff1, buff2]} = Query.fetch_components(player, BuffComponent)
+      assert %BuffComponent{buff_id: 1} = buff1
+      assert %BuffComponent{buff_id: 2} = buff2
+    end
+
+    test "returns an empty list if the Entity or Component doesn't exists" do
+      # If the Entity or Component doesn't exists, it returns an empty list
+      # This is a design choice to focus on performance
+      # For concistency, the System should check that the Entity exists with
+      # fetch_entity/1
+      assert {:ok, []} = Query.fetch_components(invalid_entity(), PlayerComponent)
+      assert {:ok, []} = Query.fetch_components(spawn_entity(), InvalidComponent)
+    end
+  end
+
   describe "fetch_component/2" do
-    test "returns a components by it's module name" do
+    test "returns a component by it's module name" do
       components = [{PositionComponent, [pos_x: 13, pos_y: 37]}]
       entity = spawn_entity(components: components)
 
@@ -160,11 +192,11 @@ defmodule ElvenGard.ECS.QueryTest do
 
     test "raises an error if more that 1 component is found" do
       # Mnesia doesn't seems to support duplicate bag so components must be differents
-      components = [PositionComponent, {PositionComponent, [map_id: 2]}]
+      components = [{BuffComponent, [buff_id: 1]}, {BuffComponent, [buff_id: 2]}]
       entity = spawn_entity(components: components)
 
       assert_raise RuntimeError, ~r/have more that 1 component of type/, fn ->
-        Query.fetch_component(entity, PositionComponent)
+        Query.fetch_component(entity, BuffComponent)
       end
     end
   end

@@ -66,10 +66,22 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
+  Fetches ALL components by there module for a given entity.
+  """
+  @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
+  def fetch_components(%Entity{} = entity, component) when is_atom(component) do
+    Config.backend().fetch_components(entity, component)
+  end
+
+  @doc """
   Fetches the component by its module for a given entity.
   """
   @spec fetch_component(Entity.t(), module()) :: {:ok, Component.t()} | {:error, :not_found}
-  def fetch_component(%Entity{} = entity, component_module) when is_atom(component_module) do
-    Config.backend().fetch_component(entity, component_module)
+  def fetch_component(%Entity{} = entity, component) when is_atom(component) do
+    case Config.backend().fetch_components(entity, component) do
+      {:ok, []} -> {:error, :not_found}
+      {:ok, [component]} -> {:ok, component}
+      _ -> raise "#{inspect(entity)} have more that 1 component of type #{inspect(component)}"
+    end
   end
 end
