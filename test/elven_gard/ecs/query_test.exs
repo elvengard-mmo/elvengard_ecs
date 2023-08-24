@@ -78,6 +78,32 @@ defmodule ElvenGard.ECS.QueryTest do
     end
   end
 
+  describe "parent_of?/2" do
+    test "return if an Entity is the parent of another" do
+      dummy = spawn_entity()
+      parent = spawn_entity()
+      child = spawn_entity(parent: parent)
+
+      assert Query.parent_of?(parent, child)
+      refute Query.parent_of?(child, parent)
+      refute Query.parent_of?(dummy, parent)
+      refute Query.parent_of?(dummy, child)
+    end
+  end
+
+  describe "child_of?/2" do
+    test "return if an Entity is the child of another" do
+      dummy = spawn_entity()
+      parent = spawn_entity()
+      child = spawn_entity(parent: parent)
+
+      assert Query.child_of?(child, parent)
+      refute Query.child_of?(parent, child)
+      refute Query.child_of?(dummy, child)
+      refute Query.child_of?(dummy, parent)
+    end
+  end
+
   ## Tests - Components
 
   defmodule PlayerComponent do

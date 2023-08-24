@@ -16,6 +16,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   use Task
 
+  import ElvenGard.ECS.MnesiaBackend.Records
+
   alias ElvenGard.ECS.{Component, Entity}
 
   @timeout 5000
@@ -81,6 +83,21 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.map(&build_entity_struct/1)
     # Wrap into :ok tuple
     |> then(&{:ok, &1})
+  end
+
+  @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
+  def parent_of?(%Entity{id: parent_id}, %Entity{id: child_id}) do
+    case :mnesia.dirty_read({Entity, child_id}) do
+      [child_record] ->
+        child_record
+        # Get the parent_id
+        |> entity(:parent_id)
+        # Check if child.parent_id == parent_id
+        |> Kernel.==(parent_id)
+
+      [] ->
+        false
+    end
   end
 
   @spec components(Entity.t()) :: {:ok, [Component.t()]}

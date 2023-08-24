@@ -39,6 +39,22 @@ defmodule ElvenGard.ECS.Query do
     Config.backend().children(entity)
   end
 
+  @doc """
+  TODO: Documentation
+  """
+  @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
+  def parent_of?(%Entity{} = maybe_parent, %Entity{} = maybe_child) do
+    Config.backend().parent_of?(maybe_parent, maybe_child)
+  end
+
+  @doc """
+  TODO: Documentation
+  """
+  @spec child_of?(Entity.t(), Entity.t()) :: boolean()
+  def child_of?(%Entity{} = maybe_child, %Entity{} = maybe_parent) do
+    Config.backend().parent_of?(maybe_parent, maybe_child)
+  end
+
   ## Components
 
   @spec components(Entity.t()) :: {:ok, [Component.t()]}
