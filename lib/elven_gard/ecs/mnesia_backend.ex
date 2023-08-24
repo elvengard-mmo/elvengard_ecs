@@ -142,12 +142,16 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp build_entity_struct(id), do: %Entity{id: id}
 
-  defp record_to_struct({Entity, id, _parent}), do: build_entity_struct(id)
+  defp record_to_struct(entity_record) do
+    entity_record
+    |> entity(:id)
+    |> build_entity_struct()
+  end
 
   defp mnesia_entity_from_spec(%{id: id, parent: parent}) do
     case parent do
-      nil -> {Entity, id, parent[:id]}
-      %Entity{id: parent_id} -> {Entity, id, parent_id}
+      nil -> entity(id: id)
+      %Entity{id: parent_id} -> entity(id: id, parent_id: parent_id)
     end
   end
 
@@ -159,10 +163,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp do_set_parent(%Entity{id: id}, parent) do
-    :mnesia.write({Entity, id, parent.id})
+    entity(id: id, parent_id: parent.id) |> :mnesia.write()
   end
 
   defp do_add_component(%Entity{id: owner_id}, %component_mod{} = component) do
-    :mnesia.write({Component, component_mod, owner_id, component})
+    component(type: component_mod, owner_id: owner_id, component: component)
+    |> :mnesia.write()
   end
 end
