@@ -14,7 +14,7 @@ defmodule ElvenGard.ECS.Query do
   ## Entities
 
   @doc """
-  TODO: Documentation
+  Fetches an `ElvenGard.ECS.Entity.t()` by its ID.
   """
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) when is_entity_id(id) do
@@ -24,7 +24,7 @@ defmodule ElvenGard.ECS.Query do
   ## Relationships
 
   @doc """
-  TODO: Documentation
+  Returns the list of parent entities for the given entity.
   """
   @spec parent(Entity.t()) :: {:ok, nil | Entity.t()} | {:error, :not_found}
   def parent(%Entity{} = entity) do
@@ -32,7 +32,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  TODO: Documentation
+  Returns the list of child entities for the given entity.
   """
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
   def children(%Entity{} = entity) do
@@ -40,7 +40,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  TODO: Documentation
+  Reurns `true` if a given entity is a parent of another entity.
   """
   @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
   def parent_of?(%Entity{} = maybe_parent, %Entity{} = maybe_child) do
@@ -48,7 +48,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  TODO: Documentation
+  Reurns `true` if a given entity is a child of another entity.
   """
   @spec child_of?(Entity.t(), Entity.t()) :: boolean()
   def child_of?(%Entity{} = maybe_child, %Entity{} = maybe_parent) do
@@ -57,8 +57,19 @@ defmodule ElvenGard.ECS.Query do
 
   ## Components
 
+  @doc """
+  Lists all the components for a given entity.
+  """
   @spec components(Entity.t()) :: {:ok, [Component.t()]}
   def components(%Entity{} = entity) do
     Config.backend().components(entity)
+  end
+
+  @doc """
+  Fetches the component by its module for a given entity.
+  """
+  @spec fetch_component(Entity.t(), module()) :: {:ok, Component.t()} | {:error, :not_found}
+  def fetch_component(%Entity{} = entity, component_module) when is_atom(component_module) do
+    Config.backend().fetch_component(entity, component_module)
   end
 end
