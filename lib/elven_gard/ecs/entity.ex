@@ -5,13 +5,14 @@ defmodule ElvenGard.ECS.Entity do
 
   alias __MODULE__
   alias ElvenGard.ECS.UUID
+  alias ElvenGard.ECS.Component
 
   @type id :: String.t() | integer()
   @type t :: %Entity{id: id()}
 
   @type entity_spec :: %{
           id: id(),
-          components: [module()],
+          components: [Component.component_spec()],
           children: [t()],
           parent: t() | nil
         }

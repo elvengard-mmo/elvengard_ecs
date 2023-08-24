@@ -8,11 +8,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
     | entity_id | parent_id or nil |
 
+  Component Table
+
+    | component_type | owner_id | component |
+
   """
 
   use Task
 
-  alias ElvenGard.ECS.Entity
+  alias ElvenGard.ECS.{Component, Entity}
 
   @timeout 5000
 
@@ -25,8 +29,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec spawn_entity(Entity.entity_spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
   def spawn_entity(specs) do
-    if length(specs.components) > 0, do: raise("unimplemented")
-
     transaction(fn ->
       case :mnesia.wread({Entity, specs.id}) do
         [] ->
@@ -38,7 +40,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
           entity = record_to_struct(entity_record)
           Enum.each(specs.children, &do_set_parent(&1, entity))
 
-          # Return our Entity structure 
+          # Write all components
+          specs.components
+          |> Enum.map(&Component.spec_to_struct/1)
+          |> Enum.each(&do_add_component(entity, &1))
+
+          # Return our Entity structure
           entity
 
         [_] ->
@@ -60,7 +67,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case :mnesia.dirty_read({Entity, id}) do
       [] -> {:error, :not_found}
       [{Entity, ^id, nil}] -> {:ok, nil}
-      [{Entity, ^id, parent_id}] -> {:ok, build_entity(parent_id)}
+      [{Entity, ^id, parent_id}] -> {:ok, build_entity_struct(parent_id)}
     end
   end
 
@@ -70,8 +77,18 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> :mnesia.dirty_index_read(id, :parent_id)
     # Keep only the id
     |> Enum.map(&elem(&1, 1))
-    # Fetch the entity if exists
-    |> Enum.map(&build_entity/1)
+    # Transform the id into an Entity struct
+    |> Enum.map(&build_entity_struct/1)
+    # Wrap into :ok tuple
+    |> then(&{:ok, &1})
+  end
+
+  @spec components(Entity.t()) :: {:ok, [Component.t()]}
+  def components(%Entity{id: id}) do
+    Component
+    |> :mnesia.dirty_index_read(id, :owner_id)
+    # Keep only the component
+    |> Enum.map(&elem(&1, 3))
     # Wrap into :ok tuple
     |> then(&{:ok, &1})
   end
@@ -88,18 +105,27 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     {:atomic, :ok} =
       :mnesia.create_table(
         Entity,
+        type: :set,
         attributes: [:id, :parent_id],
         index: [:parent_id]
       )
 
-    :ok = :mnesia.wait_for_tables([Entity], @timeout)
+    {:atomic, :ok} =
+      :mnesia.create_table(
+        Component,
+        type: :bag,
+        attributes: [:type, :owner_id, :component],
+        index: [:owner_id]
+      )
+
+    :ok = :mnesia.wait_for_tables([Entity, Component], @timeout)
   end
 
   ## Private Helpers
 
-  defp build_entity(id), do: %Entity{id: id}
+  defp build_entity_struct(id), do: %Entity{id: id}
 
-  defp record_to_struct({Entity, id, _parent}), do: build_entity(id)
+  defp record_to_struct({Entity, id, _parent}), do: build_entity_struct(id)
 
   defp mnesia_entity_from_spec(%{id: id, parent: parent}) do
     case parent do
@@ -116,9 +142,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp do_set_parent(%Entity{id: id}, parent) do
-    case :mnesia.wread({Entity, id}) do
-      [{Entity, ^id, _parent_id}] -> :mnesia.write({Entity, id, parent.id})
-      [] -> :mnesia.abort(:not_found)
-    end
+    :mnesia.write({Entity, id, parent.id})
+  end
+
+  defp do_add_component(%Entity{id: owner_id}, %component_mod{} = component) do
+    :mnesia.write({Component, component_mod, owner_id, component})
   end
 end

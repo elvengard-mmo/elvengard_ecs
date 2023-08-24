@@ -1,25 +1,18 @@
 defmodule ElvenGard.ECS.QueryTest do
   use ExUnit.Case, async: true
 
-  alias ElvenGard.ECS.{Entity, Query}
+  alias ElvenGard.ECS.{Command, Entity, Query}
 
-  ## Tests
+  ## Tests - Entities
 
-  test "spawn_entity/1 register an entity" do
-    specs = Entity.entity_spec()
-
-    assert {:ok, %Entity{} = entity} = Query.spawn_entity(specs)
-    assert specs.id == entity.id
-
-    assert {:error, :already_spawned} = Query.spawn_entity(specs)
-  end
-
-  test "fetch_entity/1 return an entity if found" do
+  test "fetch_entity/1 returns an entity if found" do
     entity = spawn_entity()
 
     assert {:ok, ^entity} = Query.fetch_entity(entity.id)
     assert {:error, :not_found} = Query.fetch_entity("<unknown>")
   end
+
+  ## Tests - Relationships
 
   describe "parent/1" do
     test "returns the parent using 'parent' entity spec" do
@@ -85,10 +78,49 @@ defmodule ElvenGard.ECS.QueryTest do
     end
   end
 
+  ## Tests - Components
+
+  defmodule PlayerComponent do
+    use ElvenGard.ECS.Component, state: [name: "Player"]
+  end
+
+  defmodule PositionComponent do
+    use ElvenGard.ECS.Component, state: [map_id: 1, pos_x: 0, pos_y: 0]
+  end
+
+  describe "components/1" do
+    test "returns a list of components for an Entity" do
+      entity = spawn_entity()
+      assert {:ok, []} = Query.components(entity)
+
+      entity2 = spawn_entity(components: [PlayerComponent])
+      assert {:ok, [player_component2]} = Query.components(entity2)
+      assert %PlayerComponent{name: "Player"} = player_component2
+
+      entity3 = spawn_entity(components: [{PlayerComponent, [name: "TestPlayer"]}])
+      assert {:ok, [player_component3]} = Query.components(entity3)
+      assert %PlayerComponent{name: "TestPlayer"} = player_component3
+
+      components4 = [{PlayerComponent, []}, {PositionComponent, [pos_x: 13, pos_y: 37]}]
+      entity4 = spawn_entity(components: components4)
+      assert {:ok, [player_component4, position_component4]} = Query.components(entity4)
+      assert %PlayerComponent{name: "Player"} = player_component4
+      assert %PositionComponent{map_id: 1, pos_x: 13, pos_y: 37} = position_component4
+    end
+
+    test "returns an empty list if entity doesn't exists" do
+      # If the parent entity doesn't exists, it returns an empty list
+      # This is a design choice to focus on performance
+      # For concistency, the system should check that the parent exists with
+      # fetch_entity/1
+      assert {:ok, []} = Query.components(%Entity{id: "<invalid>"})
+    end
+  end
+
   ## Helpers
 
   def spawn_entity(attrs \\ []) do
-    {:ok, entity} = attrs |> Entity.entity_spec() |> Query.spawn_entity()
+    {:ok, entity} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
     entity
   end
 end
