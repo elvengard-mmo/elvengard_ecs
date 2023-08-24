@@ -78,7 +78,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     Entity
     |> :mnesia.dirty_index_read(id, :parent_id)
     # Keep only the id
-    |> Enum.map(&elem(&1, 1))
+    |> Enum.map(&entity(&1, :id))
     # Transform the id into an Entity struct
     |> Enum.map(&build_entity_struct/1)
     # Wrap into :ok tuple
@@ -105,7 +105,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     Component
     |> :mnesia.dirty_index_read(id, :owner_id)
     # Keep only the component
-    |> Enum.map(&elem(&1, 3))
+    |> Enum.map(&component(&1, :component))
     # Wrap into :ok tuple
     |> then(&{:ok, &1})
   end
