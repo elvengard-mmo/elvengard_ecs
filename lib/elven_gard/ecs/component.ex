@@ -5,7 +5,7 @@ defmodule ElvenGard.ECS.Component do
 
   @type t :: struct()
   @type type :: module()
-  @type component_spec :: module() | {module() | Keyword.t()}
+  @type spec :: module() | {module() | Keyword.t()}
 
   ## Public API
 

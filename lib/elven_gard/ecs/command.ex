@@ -12,7 +12,7 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
-  @spec spawn_entity(Entity.entity_spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
+  @spec spawn_entity(Entity.spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
   def spawn_entity(specs) when is_map(specs) do
     Config.backend().spawn_entity(specs)
   end

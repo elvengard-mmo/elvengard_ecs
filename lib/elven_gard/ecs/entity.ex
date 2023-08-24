@@ -10,9 +10,9 @@ defmodule ElvenGard.ECS.Entity do
   @type id :: String.t() | integer()
   @type t :: %Entity{id: id()}
 
-  @type entity_spec :: %{
+  @type spec :: %{
           id: id(),
-          components: [Component.component_spec()],
+          components: [Component.spec()],
           children: [t()],
           parent: t() | nil
         }
@@ -20,14 +20,14 @@ defmodule ElvenGard.ECS.Entity do
   @enforce_keys [:id]
   defstruct [:id]
 
-  @callback new(Keyword.t()) :: entity_spec()
+  @callback entity_spec(Keyword.t()) :: spec()
 
   # Public API
 
   @doc """
   TODO: Documentation
   """
-  @spec entity_spec(Keyword.t()) :: entity_spec()
+  @spec entity_spec(Keyword.t()) :: spec()
   def entity_spec(opts \\ []) do
     default = %{
       id: UUID.uuid4(),

@@ -9,6 +9,9 @@ defmodule ElvenGard.ECS.EntityTest do
   end
 
   test "define entity_spec/0 and entity_spec/1" do
+    function_exported?(Entity, :entity_spec, 0)
+    function_exported?(Entity, :entity_spec, 1)
+
     specs = Entity.entity_spec()
 
     assert is_map(specs)

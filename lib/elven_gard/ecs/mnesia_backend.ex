@@ -29,7 +29,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     Task.start_link(__MODULE__, :init, [])
   end
 
-  @spec spawn_entity(Entity.entity_spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
+  @spec spawn_entity(Entity.spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
   def spawn_entity(specs) do
     transaction(fn ->
       case :mnesia.wread({Entity, specs.id}) do
@@ -111,7 +111,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
-  def fetch_components(%Entity{id: owner_id} = entity, component) do
+  def fetch_components(%Entity{id: owner_id}, component) do
     # TODO: Generate the select query
     match = {Component, :"$1", :"$2", :"$3"}
     guards = [{:==, :"$1", component}, {:==, :"$2", owner_id}]
