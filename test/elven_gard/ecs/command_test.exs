@@ -22,7 +22,7 @@ defmodule ElvenGard.ECS.CommandTest do
       assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
       assert specs.id == entity.id
 
-      assert {:error, :already_spawned} = Command.spawn_entity(specs)
+      assert {:error, :already_exists} = Command.spawn_entity(specs)
     end
 
     test "spawn an Entity with parent spec" do

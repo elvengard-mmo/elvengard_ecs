@@ -29,32 +29,51 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     Task.start_link(__MODULE__, :init, [])
   end
 
-  @spec spawn_entity(Entity.spec()) :: {:ok, Entity.t()} | {:error, :already_spawned}
-  def spawn_entity(specs) do
-    transaction(fn ->
-      case :mnesia.wread({Entity, specs.id}) do
-        [] ->
-          # Create our component
-          entity_record = mnesia_entity_from_spec(specs)
-          :ok = :mnesia.write(entity_record)
+  ## Transactions
 
-          # Set all children's parent
-          entity = record_to_struct(entity_record)
-          Enum.each(specs.children, &do_set_parent(&1, entity))
-
-          # Write all components
-          specs.components
-          |> Enum.map(&Component.spec_to_struct/1)
-          |> Enum.each(&do_add_component(entity, &1))
-
-          # Return our Entity structure
-          entity
-
-        [_] ->
-          :mnesia.abort(:already_spawned)
-      end
-    end)
+  @spec transaction((() -> result)) :: {:error, result} | {:ok, any()} when result: any()
+  def transaction(query) do
+    case :mnesia.transaction(query) do
+      {:atomic, result} -> {:ok, result}
+      {:aborted, reason} -> {:error, reason}
+    end
   end
+
+  @spec abort(any()) :: no_return()
+  def abort(reason) do
+    :mnesia.abort(reason)
+  end
+
+  ### Entities
+
+  @spec create_entity(Entity.id(), Entity.t()) :: {:ok, Entity.t()} | {:error, :already_exists}
+  def create_entity(id, parent) do
+    parent_id = if not is_nil(parent), do: parent.id
+    entity = entity(id: id, parent_id: parent_id)
+
+    case insert_new(entity) do
+      :ok -> {:ok, build_entity_struct(id)}
+      {:error, :already_exists} = error -> error
+    end
+  end
+
+  @spec set_parent(Entity.t(), Entity.t()) :: :ok | {:error, :not_found}
+  def set_parent(%Entity{id: id}, parent) do
+    parent_id = if not is_nil(parent), do: parent.id
+
+    entity(id: id, parent_id: parent_id)
+    |> update()
+  end
+
+  @spec add_component(Entity.t(), Component.spec()) :: :ok
+  def add_component(%Entity{id: id}, component_spec) do
+    component_spec
+    |> Component.spec_to_struct()
+    |> then(&component(type: &1.__struct__, owner_id: id, component: &1))
+    |> insert()
+  end
+
+  ### Dirty operations
 
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
@@ -151,34 +170,64 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Private Helpers
 
+  defp insert(record) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.write(record)
+      false -> :mnesia.dirty_write(record)
+    end
+  end
+
+  defp insert_new(record) do
+    do_insert_new(
+      elem(record, 0),
+      elem(record, 1),
+      record,
+      :mnesia.is_transaction()
+    )
+  end
+
+  defp do_insert_new(type, key, record, false) do
+    case :mnesia.dirty_read({type, key}) do
+      [] -> :mnesia.dirty_write(record)
+      _ -> {:error, :already_exists}
+    end
+  end
+
+  defp do_insert_new(type, key, record, true) do
+    case :mnesia.wread({type, key}) do
+      [] -> :mnesia.write(record)
+      _ -> :mnesia.abort(:already_exists)
+    end
+  end
+
+  defp update(record) do
+    do_update(
+      elem(record, 0),
+      elem(record, 1),
+      record,
+      :mnesia.is_transaction()
+    )
+  end
+
+  defp do_update(type, key, record, false) do
+    case :mnesia.dirty_read({type, key}) do
+      [] -> {:error, :not_found}
+      _ -> :mnesia.dirty_write(record)
+    end
+  end
+
+  defp do_update(type, key, record, true) do
+    case :mnesia.read({type, key}) do
+      [] -> :mnesia.abort(:not_found)
+      _ -> :mnesia.write(record)
+    end
+  end
+
   defp build_entity_struct(id), do: %Entity{id: id}
 
   defp record_to_struct(entity_record) do
     entity_record
     |> entity(:id)
     |> build_entity_struct()
-  end
-
-  defp mnesia_entity_from_spec(%{id: id, parent: parent}) do
-    case parent do
-      nil -> entity(id: id)
-      %Entity{id: parent_id} -> entity(id: id, parent_id: parent_id)
-    end
-  end
-
-  defp transaction(query) do
-    case :mnesia.transaction(query) do
-      {:atomic, result} -> {:ok, result}
-      {:aborted, reason} -> {:error, reason}
-    end
-  end
-
-  defp do_set_parent(%Entity{id: id}, parent) do
-    entity(id: id, parent_id: parent.id) |> :mnesia.write()
-  end
-
-  defp do_add_component(%Entity{id: owner_id}, %component_mod{} = component) do
-    component(type: component_mod, owner_id: owner_id, component: component)
-    |> :mnesia.write()
   end
 end
