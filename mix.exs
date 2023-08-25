@@ -13,9 +13,13 @@ defmodule ElvenGard.ECS.MixProject do
       start_permanent: Mix.env() == :prod,
       name: @app_name,
       description: "Game server toolkit written in Elixir # ECS",
-      deps: deps()
+      deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env())
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do

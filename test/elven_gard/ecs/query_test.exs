@@ -1,7 +1,8 @@
 defmodule ElvenGard.ECS.QueryTest do
-  use ExUnit.Case, async: true
+  use ElvenGard.ECS.EntityCase, async: true
 
-  alias ElvenGard.ECS.{Command, Entity, Query}
+  alias ElvenGard.ECS.Query
+  alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
 
   ## Tests - Entities
 
@@ -106,18 +107,6 @@ defmodule ElvenGard.ECS.QueryTest do
 
   ## Tests - Components
 
-  defmodule PlayerComponent do
-    use ElvenGard.ECS.Component, state: [name: "Player"]
-  end
-
-  defmodule PositionComponent do
-    use ElvenGard.ECS.Component, state: [map_id: 1, pos_x: 0, pos_y: 0]
-  end
-
-  defmodule BuffComponent do
-    use ElvenGard.ECS.Component, state: [buff_id: nil]
-  end
-
   describe "components/1" do
     test "returns a list of components for an Entity" do
       entity = spawn_entity()
@@ -199,14 +188,5 @@ defmodule ElvenGard.ECS.QueryTest do
         Query.fetch_component(entity, BuffComponent)
       end
     end
-  end
-
-  ## Helpers
-
-  defp invalid_entity(), do: %Entity{id: "<invalid>"}
-
-  defp spawn_entity(attrs \\ []) do
-    {:ok, entity} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
-    entity
   end
 end

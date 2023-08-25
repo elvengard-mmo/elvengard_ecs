@@ -1,21 +1,8 @@
 defmodule ElvenGard.ECS.CommandTest do
-  use ExUnit.Case, async: true
+  use ElvenGard.ECS.EntityCase, async: true
 
   alias ElvenGard.ECS.{Command, Entity, Query}
-
-  ## Test Structures
-
-  defmodule PlayerComponent do
-    use ElvenGard.ECS.Component, state: [name: "Player"]
-  end
-
-  defmodule PositionComponent do
-    use ElvenGard.ECS.Component, state: [map_id: 1, pos_x: 0, pos_y: 0]
-  end
-
-  defmodule BuffComponent do
-    use ElvenGard.ECS.Component, state: [buff_id: nil]
-  end
+  alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
 
   ## Tests
 
@@ -117,14 +104,5 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 42} in components
       assert %BuffComponent{buff_id: 1337} in components
     end
-  end
-
-  ## Helpers
-
-  defp invalid_entity(), do: %Entity{id: "<invalid>"}
-
-  defp spawn_entity(attrs \\ []) do
-    {:ok, entity} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
-    entity
   end
 end
