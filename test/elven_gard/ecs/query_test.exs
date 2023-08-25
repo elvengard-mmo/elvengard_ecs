@@ -12,13 +12,40 @@ defmodule ElvenGard.ECS.QueryTest do
 
       assert {:ok, [^pet1]} = Query.select_entities(with_parent: player1)
       assert {:ok, []} = Query.select_entities(with_parent: player2)
+      assert {:ok, []} = Query.select_entities(with_parent: pet1)
     end
 
     test "without parent" do
       %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
 
-      assert {:ok, []} = Query.select_entities(without_parent: player1)
-      assert {:ok, [^pet1]} = Query.select_entities(without_parent: player2)
+      assert {:ok, entities} = Query.select_entities(without_parent: player1)
+      refute pet1 in entities
+      assert player1 in entities
+      assert player2 in entities
+
+      assert {:ok, entities} = Query.select_entities(without_parent: player2)
+      assert pet1 in entities
+      assert player1 in entities
+      assert player2 in entities
+    end
+
+    test "with component" do
+      %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
+
+      assert {:ok, entities} = Query.select_entities(with_component: PlayerComponent)
+      assert player1 in entities
+      assert player2 in entities
+      refute pet1 in entities
+
+      assert {:ok, entities} = Query.select_entities(with_component: PositionComponent)
+      assert player1 in entities
+      assert player2 in entities
+      assert pet1 in entities
+
+      assert {:ok, entities} = Query.select_entities(with_component: BuffComponent)
+      assert player1 in entities
+      assert player2 in entities
+      refute pet1 in entities
     end
   end
 

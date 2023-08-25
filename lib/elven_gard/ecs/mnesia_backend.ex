@@ -47,16 +47,34 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
+  # TODO: Rewrite this fuction to me more generic and support operators like
+  # "and", "or" and "multiple queries"
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
-  def select_entities(query) do
-    # TODO: Generate the select query
-    match = {Entity, :"$1", :"$2"}
-    guards = Enum.map(query, &guard_to_match_spec/1)
-    result = [:"$1"]
-    query = [{match, guards, result}]
-    result = Entity |> select(query) |> Enum.map(&build_entity_struct/1)
+  def select_entities(with_parent: parent) do
+    Entity
+    |> index_read(parent_id(parent), :parent_id)
+    |> Enum.map(&record_to_struct/1)
+    |> then(&{:ok, &1})
+  end
 
-    {:ok, result}
+  def select_entities(without_parent: parent) do
+    match = {Entity, :"$1", :"$2"}
+    guards = [{:"=/=", :"$2", parent_id(parent)}]
+    return = [:"$1"]
+    query = [{match, guards, return}]
+
+    Entity
+    |> select(query)
+    |> Enum.map(&build_entity_struct/1)
+    |> then(&{:ok, &1})
+  end
+
+  def select_entities(with_component: component) when is_atom(component) do
+    {Component, component}
+    |> read()
+    |> Enum.map(&component(&1, :owner_id))
+    |> Enum.map(&build_entity_struct/1)
+    |> then(&{:ok, &1})
   end
 
   ### Entities
@@ -186,11 +204,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp parent_id(%Entity{id: id}), do: id
 
   defp build_entity_struct(id), do: %Entity{id: id}
-
-  defp guard_to_match_spec({:with_parent, nil}), do: {:==, :"$2", nil}
-  defp guard_to_match_spec({:with_parent, %Entity{id: id}}), do: {:==, :"$2", id}
-  defp guard_to_match_spec({:without_parent, nil}), do: {:"=/=", :"$2", nil}
-  defp guard_to_match_spec({:without_parent, %Entity{id: id}}), do: {:"=/=", :"$2", id}
 
   defp record_to_struct(entity_record) do
     entity_record
