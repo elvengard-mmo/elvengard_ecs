@@ -74,7 +74,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
-    case :mnesia.dirty_read({Entity, id}) do
+    case read({Entity, id}) do
       [entity] -> {:ok, record_to_struct(entity)}
       [] -> {:error, :not_found}
     end
@@ -82,7 +82,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec parent(Entity.t()) :: {:ok, nil | Entity.t()} | {:error, :not_found}
   def parent(%Entity{id: id}) do
-    case :mnesia.dirty_read({Entity, id}) do
+    case read({Entity, id}) do
       [] -> {:error, :not_found}
       [{Entity, ^id, nil}] -> {:ok, nil}
       [{Entity, ^id, parent_id}] -> {:ok, build_entity_struct(parent_id)}
@@ -92,7 +92,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
   def children(%Entity{id: id}) do
     Entity
-    |> :mnesia.dirty_index_read(id, :parent_id)
+    |> index_read(id, :parent_id)
     # Keep only the id
     |> Enum.map(&entity(&1, :id))
     # Transform the id into an Entity struct
@@ -103,7 +103,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
   def parent_of?(%Entity{id: parent_id}, %Entity{id: child_id}) do
-    case :mnesia.dirty_read({Entity, child_id}) do
+    case read({Entity, child_id}) do
       [child_record] ->
         child_record
         # Get the parent_id
@@ -119,7 +119,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @spec components(Entity.t()) :: {:ok, [Component.t()]}
   def components(%Entity{id: id}) do
     Component
-    |> :mnesia.dirty_index_read(id, :owner_id)
+    |> index_read(id, :owner_id)
     # Keep only the component
     |> Enum.map(&component(&1, :component))
     # Wrap into :ok tuple
@@ -134,7 +134,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     result = [:"$3"]
     query = [{match, guards, result}]
 
-    {:ok, :mnesia.dirty_select(Component, query)}
+    {:ok, select(Component, query)}
   end
 
   ## Internal API
@@ -169,6 +169,27 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp parent_id(nil), do: nil
   defp parent_id(%Entity{id: id}), do: id
+
+  defp read(tuple) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.read(tuple)
+      false -> :mnesia.dirty_read(tuple)
+    end
+  end
+
+  defp index_read(tab, key, attr) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.index_read(tab, key, attr)
+      false -> :mnesia.dirty_index_read(tab, key, attr)
+    end
+  end
+
+  defp select(tab, query) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.select(tab, query)
+      false -> :mnesia.dirty_select(tab, query)
+    end
+  end
 
   defp insert(record) do
     case :mnesia.is_transaction() do
