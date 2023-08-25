@@ -13,6 +13,10 @@ defmodule ElvenGard.ECS.CommandTest do
     use ElvenGard.ECS.Component, state: [map_id: 1, pos_x: 0, pos_y: 0]
   end
 
+  defmodule BuffComponent do
+    use ElvenGard.ECS.Component, state: [buff_id: nil]
+  end
+
   ## Tests
 
   describe "spawn_entity/1" do
@@ -59,5 +63,68 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %PlayerComponent{name: "Player"} = player_component
       assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} = position_component
     end
+  end
+
+  describe "set_parent/2" do
+    test "set the parent for an Entity" do
+      entity_parent = spawn_entity()
+
+      entity = spawn_entity()
+      {:ok, parent} = Query.parent(entity)
+      assert is_nil(parent)
+
+      assert :ok = Command.set_parent(entity, entity_parent)
+      {:ok, parent} = Query.parent(entity)
+      assert parent == entity_parent
+
+      assert :ok = Command.set_parent(entity, nil)
+      {:ok, parent} = Query.parent(entity)
+      assert is_nil(parent)
+    end
+  end
+
+  describe "add_component/2" do
+    test "add a Component to an Entity" do
+      entity = spawn_entity()
+      assert {:ok, []} = Query.components(entity)
+
+      # Add a first Component
+      assert :ok = Command.add_component(entity, PlayerComponent)
+      {:ok, components} = Query.components(entity)
+      assert length(components) == 1
+      assert %PlayerComponent{name: "Player"} in components
+
+      # Add a second Component
+      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 42]})
+      {:ok, components} = Query.components(entity)
+      assert length(components) == 2
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+
+      # Add the same Component
+      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      {:ok, components} = Query.components(entity)
+      assert length(components) == 3
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+      assert %BuffComponent{buff_id: 1337} in components
+
+      # Add the same buff: Mnesia doesn't support duplicate_bag
+      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      {:ok, components} = Query.components(entity)
+      assert length(components) == 3
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+      assert %BuffComponent{buff_id: 1337} in components
+    end
+  end
+
+  ## Helpers
+
+  defp invalid_entity(), do: %Entity{id: "<invalid>"}
+
+  defp spawn_entity(attrs \\ []) do
+    {:ok, entity} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
+    entity
   end
 end

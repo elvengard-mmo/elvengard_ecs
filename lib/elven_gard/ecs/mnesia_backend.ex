@@ -48,8 +48,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec create_entity(Entity.id(), Entity.t()) :: {:ok, Entity.t()} | {:error, :already_exists}
   def create_entity(id, parent) do
-    parent_id = if not is_nil(parent), do: parent.id
-    entity = entity(id: id, parent_id: parent_id)
+    entity = entity(id: id, parent_id: parent_id(parent))
 
     case insert_new(entity) do
       :ok -> {:ok, build_entity_struct(id)}
@@ -57,12 +56,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  @spec set_parent(Entity.t(), Entity.t()) :: :ok | {:error, :not_found}
+  @spec set_parent(Entity.t(), Entity.t()) :: :ok
   def set_parent(%Entity{id: id}, parent) do
-    parent_id = if not is_nil(parent), do: parent.id
-
-    entity(id: id, parent_id: parent_id)
-    |> update()
+    entity(id: id, parent_id: parent_id(parent))
+    |> insert()
   end
 
   @spec add_component(Entity.t(), Component.spec()) :: :ok
@@ -170,6 +167,9 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Private Helpers
 
+  defp parent_id(nil), do: nil
+  defp parent_id(%Entity{id: id}), do: id
+
   defp insert(record) do
     case :mnesia.is_transaction() do
       true -> :mnesia.write(record)
@@ -197,29 +197,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case :mnesia.wread({type, key}) do
       [] -> :mnesia.write(record)
       _ -> :mnesia.abort(:already_exists)
-    end
-  end
-
-  defp update(record) do
-    do_update(
-      elem(record, 0),
-      elem(record, 1),
-      record,
-      :mnesia.is_transaction()
-    )
-  end
-
-  defp do_update(type, key, record, false) do
-    case :mnesia.dirty_read({type, key}) do
-      [] -> {:error, :not_found}
-      _ -> :mnesia.dirty_write(record)
-    end
-  end
-
-  defp do_update(type, key, record, true) do
-    case :mnesia.read({type, key}) do
-      [] -> :mnesia.abort(:not_found)
-      _ -> :mnesia.write(record)
     end
   end
 

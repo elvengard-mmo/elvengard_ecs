@@ -22,7 +22,7 @@ defmodule ElvenGard.ECS.Command do
   ## Entities
 
   @doc """
-  TODO: Documentation
+  Transactional way to spawn an Entity
   """
   @spec spawn_entity(Entity.spec()) :: {:ok, Entity.t()} | {:error, reason}
         when reason: :already_exists | :cant_set_children
@@ -44,6 +44,22 @@ defmodule ElvenGard.ECS.Command do
     |> transaction()
   end
 
+  @doc """
+  TODO: Documentation
+  """
+  @spec set_parent(Entity.t(), Entity.t() | nil) :: :ok | {:error, :not_found}
+  def set_parent(%Entity{} = entity, parent) do
+    Config.backend().set_parent(entity, parent)
+  end
+
+  @doc """
+  TODO: Documentation
+  """
+  @spec add_component(Entity.t(), Component.spec()) :: :ok
+  def add_component(%Entity{} = entity, component_spec) do
+    Config.backend().add_component(entity, component_spec)
+  end
+
   ## Components
 
   ## Private helpers
@@ -54,12 +70,12 @@ defmodule ElvenGard.ECS.Command do
 
   defp set_children(entity, children) do
     children
-    |> Enum.map(&Config.backend().set_parent(&1, entity))
+    |> Enum.map(&set_parent(&1, entity))
     |> Enum.all?(&match?(:ok, &1))
     |> then(&if &1, do: :ok, else: {:error, :cant_set_children})
   end
 
   defp add_components(entity, components) do
-    Enum.each(components, &Config.backend().add_component(entity, &1))
+    Enum.each(components, &add_component(entity, &1))
   end
 end
