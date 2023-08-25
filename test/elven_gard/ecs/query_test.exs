@@ -4,6 +4,24 @@ defmodule ElvenGard.ECS.QueryTest do
   alias ElvenGard.ECS.Query
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
 
+  ## General
+
+  describe "select_entities/1" do
+    test "with parent" do
+      %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
+
+      assert {:ok, [^pet1]} = Query.select_entities(with_parent: player1)
+      assert {:ok, []} = Query.select_entities(with_parent: player2)
+    end
+
+    test "without parent" do
+      %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
+
+      assert {:ok, []} = Query.select_entities(without_parent: player1)
+      assert {:ok, [^pet1]} = Query.select_entities(without_parent: player2)
+    end
+  end
+
   ## Tests - Entities
 
   test "fetch_entity/1 returns an entity if found" do
@@ -188,5 +206,38 @@ defmodule ElvenGard.ECS.QueryTest do
         Query.fetch_component(entity, BuffComponent)
       end
     end
+  end
+
+  ## Helpers
+
+  defp spawn_few_entities() do
+    player1 =
+      spawn_entity(
+        components: [
+          {PlayerComponent, [name: "Player1"]},
+          {PositionComponent, [map_id: 1]},
+          {BuffComponent, [buff_id: 42]},
+          {BuffComponent, [buff_id: 1337]}
+        ]
+      )
+
+    player2 =
+      spawn_entity(
+        components: [
+          {PlayerComponent, [name: "Player2"]},
+          {PositionComponent, [map_id: 2]},
+          {BuffComponent, [buff_id: 42]}
+        ]
+      )
+
+    pet1 =
+      spawn_entity(
+        parent: player1,
+        components: [
+          {PositionComponent, [map_id: 1]}
+        ]
+      )
+
+    %{player1: player1, pet1: pet1, player2: player2}
   end
 end

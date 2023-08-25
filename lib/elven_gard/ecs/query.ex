@@ -11,6 +11,13 @@ defmodule ElvenGard.ECS.Query do
 
   defguardp is_entity_id(id) when is_binary(id) or is_integer(id)
 
+  ## General
+
+  @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
+  def select_entities(query) do
+    Config.backend().select_entities(query)
+  end
+
   ## Entities
 
   @doc """

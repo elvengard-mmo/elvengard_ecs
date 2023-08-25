@@ -18,6 +18,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   import ElvenGard.ECS.MnesiaBackend.Records
 
+  alias ElvenGard.ECS.Entity
   alias ElvenGard.ECS.{Component, Entity}
 
   @timeout 5000
@@ -42,6 +43,20 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @spec abort(any()) :: no_return()
   def abort(reason) do
     :mnesia.abort(reason)
+  end
+
+  ## General Queries
+
+  @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
+  def select_entities(query) do
+    # TODO: Generate the select query
+    match = {Entity, :"$1", :"$2"}
+    guards = Enum.map(query, &guard_to_match_spec/1)
+    result = [:"$1"]
+    query = [{match, guards, result}]
+    result = Entity |> select(query) |> Enum.map(&build_entity_struct/1)
+
+    {:ok, result}
   end
 
   ### Entities
@@ -170,6 +185,19 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp parent_id(nil), do: nil
   defp parent_id(%Entity{id: id}), do: id
 
+  defp build_entity_struct(id), do: %Entity{id: id}
+
+  defp guard_to_match_spec({:with_parent, nil}), do: {:==, :"$2", nil}
+  defp guard_to_match_spec({:with_parent, %Entity{id: id}}), do: {:==, :"$2", id}
+  defp guard_to_match_spec({:without_parent, nil}), do: {:"=/=", :"$2", nil}
+  defp guard_to_match_spec({:without_parent, %Entity{id: id}}), do: {:"=/=", :"$2", id}
+
+  defp record_to_struct(entity_record) do
+    entity_record
+    |> entity(:id)
+    |> build_entity_struct()
+  end
+
   defp read(tuple) do
     case :mnesia.is_transaction() do
       true -> :mnesia.read(tuple)
@@ -219,13 +247,5 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       [] -> :mnesia.write(record)
       _ -> :mnesia.abort(:already_exists)
     end
-  end
-
-  defp build_entity_struct(id), do: %Entity{id: id}
-
-  defp record_to_struct(entity_record) do
-    entity_record
-    |> entity(:id)
-    |> build_entity_struct()
   end
 end
