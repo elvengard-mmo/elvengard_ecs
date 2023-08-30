@@ -15,13 +15,13 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
 
     Logger.debug("=============> init/1")
 
-    # state = {key, waiting, clusters, references, discarded}
+    # state = {key, waiting, clusters, references, store}
     # {:ok, state}
     {:ok, {key, 0, %{}, %{}, %{}}}
   end
 
   # @impl true
-  def subscribe(opts, {pid, ref}, {key, waiting, clusters, references, discarded}) do
+  def subscribe(opts, {pid, ref}, {key, waiting, clusters, references, store}) do
     cluster = validate_cluster(opts)
 
     if cluster_exists?(clusters, cluster) do
@@ -35,12 +35,12 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       # Dynamically register the cluster queue
       Process.put(cluster, [])
 
-      {:ok, 0, {key, waiting, clusters, references, discarded}}
+      {:ok, 0, {key, waiting, clusters, references, store}}
     end
   end
 
   # @impl true
-  def ask(counter, {pid, ref}, {key, waiting, clusters, references, discarded}) do
+  def ask(counter, {pid, ref}, {key, waiting, clusters, references, store}) do
     cluster = Map.fetch!(references, ref)
     {^pid, ^ref, current} = Map.fetch!(clusters, cluster)
 
@@ -52,41 +52,53 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
     )
 
     demand = current + counter
-    waiting = waiting + demand
-    clusters = Map.put(clusters, cluster, {pid, ref, demand})
+    waiting = waiting + counter
+
+    # FIXME: Refacto this part lel
+    {{^cluster, value}, waiting, store} =
+      fetch_from_store({cluster, {pid, ref, demand}}, waiting, store)
+
+    # Maybe send events from store
+    Enum.map(clusters, fn {cluster, {pid, ref, _demand}} ->
+      case Process.put(cluster, []) do
+        [] -> :ok
+        events -> send_events(events, pid, ref)
+      end
+    end)
+
+    clusters = Map.put(clusters, cluster, value)
 
     Logger.debug("waiting:#{waiting}")
 
-    {:ok, demand, {key, waiting, clusters, references, discarded}}
+    {:ok, demand, {key, waiting, clusters, references, store}}
   end
 
-  # @impl true  
-  def dispatch(events, length, {key, waiting, clusters, references, discarded_events}) do
+  # @impl true
+  def dispatch(events, length, {key, waiting, clusters, references, event_store}) do
     Logger.debug("=============> dispatch: #{length} - waiting: #{waiting}")
 
-    # Get events from discarded events if exists
-    {clusters, waiting, discarded_events} =
-      maybe_fetch_discarded(clusters, waiting, discarded_events)
+    # Get events from store events if exists
+    {clusters, waiting, event_store} = maybe_fetch_from_store(clusters, waiting, event_store)
 
     # Deliver now are added to the Process queue
-    {deliver_later, discarded, waiting, clusters} = split_events(events, waiting, key, clusters)
+    {deliver_later, store, waiting, clusters} = split_events(events, waiting, key, clusters)
 
-    # Merge discarded packets
-    discarded = Map.merge(discarded_events, discarded, fn _k, v1, v2 -> v1 ++ v2 end)
+    # Merge store packets
+    store = Map.merge(event_store, store, fn _k, v1, v2 -> v1 ++ v2 end)
 
     Logger.debug(
-      "later: #{length(deliver_later)} - discarded: #{map_size(discarded)} - " <>
+      "later: #{length(deliver_later)} - store: #{map_size(store)} - " <>
         "waiting: #{waiting} - clusters: #{inspect(clusters)}"
     )
 
-    # Dispatch all events and resend ask demand for discarded events
+    # Dispatch all events and resend ask demand for store events
     clusters =
       clusters
       |> :maps.to_list()
       |> dispatch_per_cluster()
       |> :maps.from_list()
 
-    {:ok, deliver_later, {key, 0, clusters, references, discarded}}
+    {:ok, deliver_later, {key, 0, clusters, references, store}}
   end
 
   ## Private helpers
@@ -113,46 +125,45 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
     cluster in Map.keys(clusters)
   end
 
-  defp maybe_fetch_discarded(clusters, counter, discarded) do
+  defp maybe_fetch_from_store(clusters, counter, store) do
     clusters = :maps.to_list(clusters)
-    {clusters, counter, discarded} = do_maybe_fetch_discarded(clusters, counter, discarded, [])
-    {:maps.from_list(clusters), counter, discarded}
+    {clusters, counter, store} = do_maybe_fetch_from_store(clusters, counter, store, [])
+    {:maps.from_list(clusters), counter, store}
   end
 
   # No more cluster
-  defp do_maybe_fetch_discarded([], counter, discarded, acc) do
-    {acc, counter, discarded}
+  defp do_maybe_fetch_from_store([], counter, store, acc) do
+    {acc, counter, store}
   end
 
   # No more waiting events
-  defp do_maybe_fetch_discarded(clusters, 0, discarded, acc) do
-    {clusters ++ acc, 0, discarded}
+  defp do_maybe_fetch_from_store(clusters, 0, store, acc) do
+    {clusters ++ acc, 0, store}
   end
 
   # The cluster is not waiting for event
-  defp do_maybe_fetch_discarded(
+  defp do_maybe_fetch_from_store(
          [{_cluster, {_pid, _ref, 0}} = value | clusters],
          counter,
-         discarded,
+         store,
          acc
        ) do
-    do_maybe_fetch_discarded(clusters, counter, discarded, [value | acc])
+    do_maybe_fetch_from_store(clusters, counter, store, [value | acc])
   end
 
   # The cluster is waiting for event :)
-  defp do_maybe_fetch_discarded([value | clusters], counter, discarded, acc) do
+  defp do_maybe_fetch_from_store([value | clusters], counter, store, acc) do
     {cluster, {pid, ref, demand}} = value
 
-    case discarded do
+    case store do
       %{^cluster => [event | rest]} ->
-        discarded =
+        store =
           case rest do
             [] ->
-              IO.puts("===================> #{cluster}")
-              Map.delete(discarded, cluster)
+              Map.delete(store, cluster)
 
             _ ->
-              Map.put(discarded, cluster, rest)
+              Map.put(store, cluster, rest)
           end
 
         value = {cluster, {pid, ref, demand - 1}}
@@ -164,62 +175,96 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
           e -> raise "this error should not exists: #{inspect(e)} :/"
         end
 
-        do_maybe_fetch_discarded(clusters, counter, discarded, [value | acc])
+        do_maybe_fetch_from_store(clusters, counter - 1, store, [value | acc])
 
       _ ->
-        do_maybe_fetch_discarded(clusters, counter, discarded, [value | acc])
+        do_maybe_fetch_from_store(clusters, counter, store, [value | acc])
     end
   end
 
-  defp split_events(events, counter, key, clusters, pass \\ [], discarded \\ [])
-
-  defp split_events([], counter, key, clusters, pass, discarded) do
-    {:lists.reverse(pass), discarded_to_map(key, discarded), counter, clusters}
+  defp fetch_from_store({_cluster, {_pid, _ref, 0}} = value, counter, store) do
+    {value, counter, store}
   end
 
-  defp split_events(events, 0, key, clusters, pass, discarded) do
-    {:lists.reverse(pass) ++ events, discarded_to_map(key, discarded), 0, clusters}
+  defp fetch_from_store(value, 0, store) do
+    {value, 0, store}
   end
 
-  defp split_events([event | events], counter, key, clusters, pass, discarded) do
+  defp fetch_from_store({cluster, {pid, ref, demand}} = value, counter, store) do
+    case store do
+      %{^cluster => [event | rest]} ->
+        store =
+          case rest do
+            [] ->
+              IO.puts("===================> #{cluster}")
+              Map.delete(store, cluster)
+
+            _ ->
+              Map.put(store, cluster, rest)
+          end
+
+        with current when is_list(current) <- :erlang.get(cluster) do
+          # Add the event into the queue
+          Process.put(cluster, [event | current])
+        else
+          e -> raise "this error should not exists: #{inspect(e)} :/"
+        end
+
+        {{cluster, {pid, ref, demand - 1}}, counter - 1, store}
+
+      _ ->
+        {value, counter, store}
+    end
+  end
+
+  defp split_events(events, counter, key, clusters, store \\ [])
+
+  defp split_events([], counter, key, clusters, store) do
+    {[], store_to_map(key, store), counter, clusters}
+  end
+
+  defp split_events(events, 0, key, clusters, store) do
+    {events, store_to_map(key, store), 0, clusters}
+  end
+
+  defp split_events([event | events], counter, key, clusters, store) do
     case key.(event) do
       {event, cluster} ->
-        {counter, clusters, pass, discarded} =
+        {counter, clusters, store} =
           maybe_split_event(
             event,
             cluster,
             Map.get(clusters, cluster),
             counter,
             clusters,
-            pass,
-            discarded
+            store
           )
 
-        split_events(events, counter, key, clusters, pass, discarded)
+        split_events(events, counter, key, clusters, store)
 
       :none ->
-        split_events(events, counter, key, clusters, pass, discarded)
+        split_events(events, counter, key, clusters, store)
 
       other ->
         raise "the :key function should return {event, cluster}, got: #{inspect(other)}"
     end
   end
 
-  defp maybe_split_event(event, cluster, nil, counter, clusters, pass, discarded) do
+  defp maybe_split_event(event, cluster, nil, counter, clusters, store) do
     Logger.warn(
       "unknown cluster #{inspect(cluster)} computed for GenStage event " <>
         "#{inspect(event)}. The known clusters are #{inspect(Map.keys(clusters))}. " <>
-        "This event has been discarded."
+        "This event has been store."
     )
 
-    {counter, clusters, pass, [event | discarded]}
+    {counter, clusters, [event | store]}
   end
 
-  defp maybe_split_event(event, _cluster, {_pid, _ref, 0}, counter, clusters, pass, discarded) do
-    {counter, clusters, [event | pass], discarded}
+  defp maybe_split_event(event, _cluster, {_pid, _ref, 0}, counter, clusters, store) do
+    {counter, clusters, [event | store]}
   end
 
-  defp maybe_split_event(event, cluster, {pid, ref, demand}, counter, clusters, pass, discarded) do
+  defp maybe_split_event(event, cluster, {pid, ref, demand}, counter, clusters, store) do
     with current when is_list(current) <- :erlang.get(cluster) do
       # Add the event into the queue
       Process.put(cluster, [event | current])
@@ -227,12 +272,12 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       # Update demand
       clusters = Map.put(clusters, cluster, {pid, ref, demand - 1})
 
-      {counter - 1, clusters, pass, discarded}
+      {counter - 1, clusters, store}
     end
   end
 
-  defp discarded_to_map(key, discarded) do
-    discarded
+  defp store_to_map(key, store) do
+    store
     |> Enum.map(key)
     |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
   end
@@ -247,7 +292,7 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       "   ====> dispatch_per_cluster:#{cluster} - events: #{length(events)} - demand: #{demand}"
     )
 
-    # If discarded events resend a ask
+    # If store events resend a ask
     maybe_resend_ask(pid, ref, demand)
 
     # Send events to consumer

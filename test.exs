@@ -1,6 +1,6 @@
 Code.require_file("lib/elven_gard/ecs/topology/cluster_dispatcher.ex", __DIR__)
 
-## Setup 
+## Setup
 
 Mix.install([{:gen_stage, "~> 1.2"}])
 Logger.configure(level: :error)
@@ -16,7 +16,7 @@ defmodule EventProducer do
   def start_link(_opts) do
     GenStage.start_link(__MODULE__, nil, name: __MODULE__)
   end
-  
+
   @spec push(any) :: :ok
   def push(events) do
     GenServer.cast(__MODULE__, {:push, List.wrap(events)})
@@ -32,10 +32,10 @@ defmodule EventProducer do
 
   @impl true
   def handle_demand(demand, state) when demand > 0 do
-    IO.inspect(demand, label: "===> Demand")
+    # IO.inspect(demand, label: "===> Demand")
     {:noreply, [], state}
   end
-  
+
   @impl true
   def handle_cast({:push, events}, state) do
     {:noreply, events, state}
@@ -60,11 +60,11 @@ defmodule Consumer do
       2 -> IO.ANSI.green()
       3 -> IO.ANSI.yellow()
     end
-    
+
     # Inspect the event.
     time = to_string(DateTime.utc_now()) |> String.split(".") |> Enum.at(0)
     IO.puts("#{color}[#{time}] Consumer##{cluster}: #{inspect(events)}#{IO.ANSI.reset()}")
-    
+
     # Wait for a second.
     Process.sleep(cluster * 1000)
 
@@ -83,14 +83,14 @@ GenStage.sync_subscribe(b, to: a, max_demand: 1, min_demand: 0, cluster: "map_1"
 Process.sleep(1000)
 
 # Push some events
-1..200
+1..20
 |> Enum.zip(Stream.cycle(["map_2", "map_3", "map_4", "map_1"]))
 |> Enum.map(&%{cluster: elem(&1, 1), value: elem(&1, 0)})
 |> EventProducer.push()
 
-Process.sleep(3000)
+Process.sleep(2000)
 
 GenStage.sync_subscribe(c, to: a, max_demand: 1, min_demand: 0, cluster: "map_2")
 GenStage.sync_subscribe(d, to: a, max_demand: 1, min_demand: 0, cluster: "map_3")
 
-Process.sleep(20000)
+Process.sleep(2000000)
