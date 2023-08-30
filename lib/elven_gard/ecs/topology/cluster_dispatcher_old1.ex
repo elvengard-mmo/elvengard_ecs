@@ -1,4 +1,4 @@
-defmodule ElvenGard.ECS.Topology.ClusterDispatcherOld do
+defmodule ElvenGard.ECS.Topology.ClusterDispatcherOld1 do
   @moduledoc false
   # This is a modification of `GenStage.PartitionDispatcher`
   # but with a dynamic management for clusters

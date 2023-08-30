@@ -3,7 +3,7 @@ Code.require_file("lib/elven_gard/ecs/topology/cluster_dispatcher.ex", __DIR__)
 ## Setup
 
 Mix.install([{:gen_stage, "~> 1.2"}])
-Logger.configure(level: :error)
+# Logger.configure(level: :error)
 
 ## Code
 
