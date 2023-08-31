@@ -11,22 +11,26 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
 
   # @impl true
   def init(opts) do
-    key = validate_key(opts)
+    hash = validate_hash(opts)
 
-    Logger.debug("=======> init")
+    # Logger.debug("=======> init")
 
-    # {:ok, {key, waiting, clusters, references, discarded}}
-    {:ok, {key, 0, %{}, %{}, %{}}}
+    # {:ok, {hash, waiting, pending, clusters, references, discarded, demands}}
+    {:ok, {hash, 0, 0, %{}, %{}, %{}, :queue.new()}}
   end
 
   # @impl true
-  def info(_msg, {_key, _waiting, _clusters, _references, _discarded}) do
+  def info(_msg, {_hash, _waiting, _pending, _clusters, _references, _discarded, _demands}) do
     raise "unsupported yet"
   end
 
   # @impl true
-  def subscribe(opts, {pid, ref}, {key, waiting, clusters, references, discarded}) do
-    Logger.debug("=======> subscribe")
+  def subscribe(
+        opts,
+        {pid, ref},
+        {hash, waiting, pending, clusters, references, discarded, demands}
+      ) do
+    # Logger.debug("=======> subscribe")
 
     cluster = validate_cluster(opts)
 
@@ -41,23 +45,38 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       # Dynamically register the cluster queue
       Process.put(cluster, [])
 
-      {:ok, 0, {key, waiting, clusters, references, discarded}}
+      {:ok, 0, {hash, waiting, pending, clusters, references, discarded, demands}}
     end
   end
 
   # @impl true
-  def cancel({_pid, _ref}, {_key, _waiting, _clusters, _references, _discarded}) do
-    raise "unsupported yet"
+  def cancel({_, ref}, {hash, waiting, pending, clusters, references, discarded, demands}) do
+    {cluster, references} = Map.pop(references, ref)
+    {{_pid, _ref, demand_or_queue}, clusters} = Map.pop(clusters, cluster)
+
+    case demand_or_queue do
+      demand when is_integer(demand) ->
+        {:ok, 0, {hash, waiting, pending + demand, clusters, references, discarded, demands}}
+
+      queue ->
+        length = :queue.len(queue)
+        discarded = Map.put(discarded, cluster, queue)
+        {:ok, length, {hash, waiting + length, pending, clusters, references, discarded, demands}}
+    end
   end
 
   # @impl true
-  def ask(counter, {_pid, ref}, {key, waiting, clusters, references, discarded}) do
-    Logger.debug("=======> ask")
+  def ask(
+        counter,
+        {_pid, ref},
+        {hash, waiting, pending, clusters, references, discarded, demands}
+      ) do
+    # Logger.debug("=======> ask")
 
     cluster = Map.fetch!(references, ref)
     {pid, ref, demand_or_queue} = Map.fetch!(clusters, cluster)
 
-    {demand_or_queue, already_sent} =
+    {demand_or_queue, _already_sent} =
       case demand_or_queue do
         demand when is_integer(demand) ->
           {demand + counter, 0}
@@ -67,16 +86,22 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       end
 
     clusters = Map.put(clusters, cluster, {pid, ref, demand_or_queue})
+    already_sent = min(pending, counter)
     demand = counter - already_sent
+    pending = pending - already_sent
 
-    {:ok, demand, {key, waiting + demand, clusters, references, discarded}}
+    {:ok, demand, {hash, waiting + demand, pending, clusters, references, discarded, demands}}
   end
 
   @doc false
-  def dispatch(events, _length, {key, waiting, clusters, references, discarded}) do
-    Logger.debug("=======> dispatch")
+  def dispatch(
+        events,
+        _length,
+        {hash, waiting, pending, clusters, references, discarded, demands}
+      ) do
+    # Logger.debug("=======> dispatch")
 
-    {deliver_later, waiting, discarded} = split_events(events, waiting, key, clusters, discarded)
+    {deliver_later, waiting, discarded} = split_events(events, waiting, hash, clusters, discarded)
 
     clusters =
       clusters
@@ -84,19 +109,19 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       |> dispatch_per_cluster()
       |> :maps.from_list()
 
-    {:ok, deliver_later, {key, waiting, clusters, references, discarded}}
+    {:ok, deliver_later, {hash, waiting, pending, clusters, references, discarded, demands}}
   end
 
   ## Private helpers
 
-  defp validate_key(opts) do
-    case Keyword.get(opts, :key) do
-      key when is_function(key, 1) ->
-        key
+  defp validate_hash(opts) do
+    case Keyword.get(opts, :hash) do
+      hash when is_function(hash, 1) ->
+        hash
 
       other ->
         raise ArgumentError,
-              ":key option must be passed a unary function, got: #{inspect(other)}"
+              ":hash option must be passed a unary function, got: #{inspect(other)}"
     end
   end
 
@@ -160,6 +185,20 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
     end
   end
 
+  defp maybe_resend_ask([]), do: []
+
+  defp maybe_resend_ask([{cluster, {pid, ref, demand_or_queue}} = cluster_info | rest]) do
+    case demand_or_queue do
+      demand when is_integer(demand) and demand > 0 ->
+        IO.puts("   ====> resend_ask:#{demand} for #{cluster}")
+        send(self(), {:"$gen_producer", {pid, ref}, {:ask, demand}})
+        [{cluster, {pid, ref, 0}} | dispatch_per_cluster(rest)]
+
+      _ ->
+        [cluster_info | dispatch_per_cluster(rest)]
+    end
+  end
+
   defp split_into_queue(events, 0, acc), do: {acc, put_into_queue(events, :queue.new())}
   defp split_into_queue([], counter, acc), do: {acc, counter}
 
@@ -170,11 +209,11 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
     Enum.reduce(events, queue, &:queue.in/2)
   end
 
-  defp split_events(events, 0, _key, _clusters, discarded), do: {events, 0, discarded}
-  defp split_events([], counter, _key, _clusters, discarded), do: {[], counter, discarded}
+  defp split_events(events, 0, _hash, _clusters, discarded), do: {events, 0, discarded}
+  defp split_events([], counter, _hash, _clusters, discarded), do: {[], counter, discarded}
 
-  defp split_events([event | events], counter, key, clusters, discarded) do
-    case key.(event) do
+  defp split_events([event | events], counter, hash, clusters, discarded) do
+    case hash.(event) do
       {event, cluster} ->
         case :erlang.get(cluster) do
           :undefined ->
@@ -187,21 +226,21 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
             split_events(
               events,
               counter,
-              key,
+              hash,
               clusters,
               Map.update(discarded, cluster, :queue.new(), &:queue.in(event, &1))
             )
 
           current ->
             Process.put(cluster, [event | current])
-            split_events(events, counter - 1, key, clusters, discarded)
+            split_events(events, counter - 1, hash, clusters, discarded)
         end
 
       :none ->
-        split_events(events, counter, key, clusters, discarded)
+        split_events(events, counter, hash, clusters, discarded)
 
       other ->
-        raise "the :key function should return {event, cluster}, got: #{inspect(other)}"
+        raise "the :hash function should return {event, cluster}, got: #{inspect(other)}"
     end
   end
 end

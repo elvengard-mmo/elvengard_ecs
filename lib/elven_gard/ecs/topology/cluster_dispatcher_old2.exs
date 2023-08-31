@@ -305,6 +305,7 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherOld2 do
         maybe_send(events, pid, ref)
         [{cluster, {pid, ref, demand_or_queue}} | dispatch_per_cluster(rest)]
     end
+  end
 
   defp send_events([], _pid, _ref), do: :ok
 
