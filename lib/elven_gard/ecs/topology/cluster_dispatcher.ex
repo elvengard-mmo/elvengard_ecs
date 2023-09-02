@@ -78,10 +78,12 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
 
     clusters = Map.put(clusters, cluster, {pid, ref, demand_or_queue})
     already_sent = min(pending, counter)
-    demand = counter - events_sent
+    demand = counter - max(already_sent, events_sent)
     pending = pending - already_sent
 
-    {:ok, demand, {hash, waiting + demand, pending, clusters, references, discarded}}
+    new_counter = counter - events_sent
+
+    {:ok, new_counter, {hash, waiting + demand, pending, clusters, references, discarded}}
   end
 
   @impl true

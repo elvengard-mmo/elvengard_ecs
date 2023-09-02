@@ -6,16 +6,17 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
   ## Tests
 
   test "subscribes, asks and cancels" do
+    disp = dispatcher(hash: &{&1, :default})
+
     pid = self()
     ref = make_ref()
-    disp = dispatcher(hash: &{&1, :default})
 
     # Subscribe, ask and cancel and leave some demand
     {:ok, 0, disp} = D.subscribe([cluster: "cluster1"], {pid, ref}, disp)
     {:ok, 10, disp} = D.ask(10, {pid, ref}, disp)
     assert {10, 0} = waiting_and_pending(disp)
     {:ok, 0, disp} = D.cancel({pid, ref}, disp)
-    assert {0, 10} = waiting_and_pending(disp)
+    assert {10, 10} = waiting_and_pending(disp)
 
     # Subscribe again and the same demand is back
     {:ok, 0, disp} = D.subscribe([cluster: "cluster2"], {pid, ref}, disp)
@@ -26,9 +27,10 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
   end
 
   test "subscribes, asks and dispatches" do
+    disp = dispatcher(hash: &{&1, :default})
+
     pid = self()
     ref = make_ref()
-    disp = dispatcher(hash: &{&1, :default})
     {:ok, 0, disp} = D.subscribe([cluster: :default], {pid, ref}, disp)
 
     {:ok, 3, disp} = D.ask(3, {pid, ref}, disp)
@@ -36,7 +38,7 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
     assert {2, 2} = waiting_and_pending(disp)
     assert_received {:"$gen_consumer", {_, ^ref}, [1]}
 
-    {:ok, 0, disp} = D.ask(2, {pid, ref}, disp)
+    {:ok, 2, disp} = D.ask(2, {pid, ref}, disp)
     assert {2, 0} = waiting_and_pending(disp)
 
     {:ok, [6, 7], disp} = D.dispatch([2, 5, 6, 7], 4, disp)
@@ -56,7 +58,7 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
     assert {2, 2} = waiting_and_pending(disp)
     assert_received {:"$gen_consumer", {_, ^ref}, [1]}
 
-    {:ok, 0, disp} = D.ask(2, {pid, ref}, disp)
+    {:ok, 2, disp} = D.ask(2, {pid, ref}, disp)
     assert {2, 0} = waiting_and_pending(disp)
 
     {:ok, [9, 11], disp} = D.dispatch([5, 7, 9, 11], 4, disp)
@@ -132,14 +134,15 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
     refute_received {:"$gen_consumer", {_, ^ref}, _}
 
     # Send partial response to odd queue
-    {:ok, 0, disp} = D.ask(5, {pid, ref}, disp)
+    {:ok, 5, disp} = D.ask(5, {pid, ref}, disp)
+    assert {5, 0} = waiting_and_pending(disp)
     {:ok, [], disp} = D.dispatch([12, 1, 14, 3, 5], 5, disp)
     assert {2, 2} = waiting_and_pending(disp)
     assert_received {:"$gen_producer", {_, ^ref}, {:ask, 2}}
     assert_received {:"$gen_consumer", {_, ^ref}, [1, 3, 5]}
 
     # Send remaining to odd queue
-    {:ok, 0, disp} = D.ask(2, {pid, ref}, disp)
+    {:ok, 2, disp} = D.ask(2, {pid, ref}, disp)
     {:ok, [], disp} = D.dispatch([7, 9], 5, disp)
     assert {0, 0} = waiting_and_pending(disp)
     refute_received {:"$gen_producer", {_, ^ref}, {:ask, _}}
