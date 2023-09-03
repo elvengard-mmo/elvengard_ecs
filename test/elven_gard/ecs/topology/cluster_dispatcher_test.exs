@@ -158,6 +158,55 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcherTest do
     assert {0, 0} = waiting_and_pending(disp)
   end
 
+  test "multiple subscribes, asks and dispatches" do
+    disp = even_odd_dispatcher()
+    pid = self()
+
+    odd_ref = make_ref()
+    {:ok, 0, disp} = D.subscribe([cluster: :odd], {pid, odd_ref}, disp)
+
+    even_ref = make_ref()
+    {:ok, 0, disp} = D.subscribe([cluster: :even], {pid, even_ref}, disp)
+
+    # Both ask for 5 events
+    {:ok, 5, disp} = D.ask(5, {pid, odd_ref}, disp)
+    assert {5, 0} = waiting_and_pending(disp)
+    {:ok, 5, disp} = D.ask(5, {pid, even_ref}, disp)
+    assert {10, 0} = waiting_and_pending(disp)
+
+    # Dispatch 10 events in ask order
+    {:ok, [], disp} = D.dispatch([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 10, disp)
+    assert {0, 0} = waiting_and_pending(disp)
+    assert_received {:"$gen_consumer", {_, ^odd_ref}, [1, 3, 5, 7, 9]}
+    assert_received {:"$gen_consumer", {_, ^even_ref}, [2, 4, 6, 8, 10]}
+
+    # Both re-ask for 5 events
+    {:ok, 5, disp} = D.ask(5, {pid, odd_ref}, disp)
+    assert {5, 0} = waiting_and_pending(disp)
+    {:ok, 5, disp} = D.ask(5, {pid, even_ref}, disp)
+    assert {10, 0} = waiting_and_pending(disp)
+
+    # Dispatch 10 events in reverse order
+    {:ok, [], disp} = D.dispatch([2, 1, 4, 3, 6, 5, 8, 7, 10, 9], 10, disp)
+    assert {0, 0} = waiting_and_pending(disp)
+    assert_received {:"$gen_consumer", {_, ^odd_ref}, [1, 3, 5, 7, 9]}
+    assert_received {:"$gen_consumer", {_, ^even_ref}, [2, 4, 6, 8, 10]}
+
+    # Both re-ask for 5 events
+    {:ok, 5, disp} = D.ask(5, {pid, odd_ref}, disp)
+    assert {5, 0} = waiting_and_pending(disp)
+    {:ok, 5, disp} = D.ask(5, {pid, even_ref}, disp)
+    assert {10, 0} = waiting_and_pending(disp)
+
+    # Dispatch partial events
+    {:ok, [], disp} = D.dispatch([1, 3, 5, 7, 9, 11, 13, 15, 17, 19], 10, disp)
+    assert {5, 5} = waiting_and_pending(disp)
+    assert_received {:"$gen_consumer", {_, ^odd_ref}, [1, 3, 5, 7, 9]}
+    refute_received {:"$gen_consumer", {_, ^even_ref}, _}
+    refute_received {:"$gen_producer", {_, ^odd_ref}, {:ask, _}}
+    assert_received {:"$gen_producer", {_, ^even_ref}, {:ask, 5}}
+  end
+
   ## Tests
 
   defp dispatcher(opts) do

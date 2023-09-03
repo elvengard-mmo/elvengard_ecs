@@ -95,7 +95,7 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
       Enum.reduce(clusters, pending, fn {cluster, {pid, ref, demand_or_queue}}, acc ->
         if is_integer(demand_or_queue) do
           events = :erlang.get(cluster)
-          remaining = demand_or_queue - length(events)
+          remaining = demand_or_queue - min(length(events), demand_or_queue)
 
           if remaining > 0 do
             send(self(), {:"$gen_producer", {pid, ref}, {:ask, remaining}})
@@ -200,8 +200,8 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
     end
   end
 
-  defp split_into_queue(events, 0, acc), do: {acc, put_into_queue(events, :queue.new())}
   defp split_into_queue([], counter, acc), do: {acc, counter}
+  defp split_into_queue(events, 0, acc), do: {acc, put_into_queue(events, :queue.new())}
 
   defp split_into_queue([event | events], counter, acc),
     do: split_into_queue(events, counter - 1, [event | acc])
@@ -239,7 +239,15 @@ defmodule ElvenGard.ECS.Topology.ClusterDispatcher do
 
           current ->
             Process.put(cluster, [event | current])
-            split_events(events, counter - 1, hash, clusters, discarded)
+
+            case Map.fetch!(clusters, cluster) do
+              {pid, ref, demand} when is_integer(demand) and demand > 0 ->
+                clusters = Map.put(clusters, cluster, {pid, ref, demand - 1})
+                split_events(events, counter - 1, hash, clusters, discarded)
+
+              _ ->
+                split_events(events, counter, hash, clusters, discarded)
+            end
         end
 
       :none ->
