@@ -29,7 +29,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
         event_source: Keyword.fetch!(opts, :event_source),
         systems: Keyword.get(opts, :systems, []),
         tick_rate: Keyword.get(opts, :tick_rate, 1),
-        concurrency: Keyword.get(opts, :concurrency, 1)
+        concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
       ]
 
       {:default, args}
@@ -48,7 +48,11 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     # use ElvenGard.ECS.System, lock_components: []
 
     def __event_subscriptions__(), do: nil
-    def __lock_components__(), do: []
+    def __lock_components__(), do: :sync
+
+    def run(delta) do
+      IO.puts("[WithoutEventsSystem] delta: #{delta}")
+    end
   end
 
   defmodule WithEventsSystem do
@@ -56,6 +60,10 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
 
     def __event_subscriptions__(), do: [Test1Event, Test2Event]
     def __lock_components__(), do: []
+
+    def run(event, delta) do
+      IO.puts("[WithEventsSystem] delta: #{delta} - event: #{inspect(event)}")
+    end
   end
 
   ## Tests
@@ -104,6 +112,6 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
 
     EventSource.dispatch(source, events)
 
-    Process.sleep(5000)
+    Process.sleep(2000)
   end
 end

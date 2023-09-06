@@ -49,6 +49,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     interval = Keyword.get(specs, :interval, 1_000)
     concurrency = Keyword.get(specs, :concurrency, System.schedulers_online())
     source = Keyword.get(specs, :event_source, EventSource.name())
+    system_timeout = Keyword.get(specs, :system_timeout, :infinity)
 
     state = %{
       id: id,
@@ -57,6 +58,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       systems: systems,
       concurrency: concurrency,
       source: source,
+      system_timeout: system_timeout,
       events: []
     }
 
@@ -73,11 +75,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
   def handle_info(:tick, state) do
     %{systems: systems, events: events} = state
 
-    IO.inspect("tick")
-
     systems
     |> Enum.flat_map(&expand_with_events(&1, events))
-    |> IO.inspect()
+    |> batch_and_execute(state)
 
     new_state = %{state | events: []}
     {:noreply, schedule_next_tick(new_state)}
@@ -90,6 +90,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   ## Internal use ONLY
 
+  @doc false
   def expand_with_events(system, events) do
     case system.__event_subscriptions__() do
       nil ->
@@ -123,5 +124,112 @@ defmodule ElvenGard.ECS.Topology.Partition do
     end
 
     %{state | prev_tick: time + remaining_time}
+  end
+
+  defp batch_and_execute([], _state), do: :ok
+
+  defp batch_and_execute(systems, state) do
+    %{concurrency: concurrency, system_timeout: system_timeout, prev_tick: prev_tick} = state
+
+    {batch, remaining} = batch_systems(systems, concurrency)
+
+    succeed =
+      batch
+      |> Task.async_stream(
+        &execute(&1, prev_tick),
+        max_concurrency: concurrency,
+        ordered: false,
+        timeout: system_timeout,
+        on_timeout: :kill_task
+      )
+      |> Stream.filter(&match?({:ok, _}, &1))
+      |> Enum.to_list()
+      |> Enum.map(&elem(&1, 1))
+
+    failed = Enum.reject(batch, &(&1 in succeed))
+
+    if failed != [] do
+      Logger.error(fn ->
+        "#{length(failed)} systems killed/crashed: #{inspect(batch, limit: :infinity)}"
+      end)
+    end
+
+    batch_and_execute(remaining, state)
+  end
+
+  # System subscribing to events
+  defp execute({system, event} = value, prev_tick) do
+    delta = now() - prev_tick
+    system.run(event, delta)
+    value
+  catch
+    kind, payload ->
+      exception = Exception.format(kind, payload, __STACKTRACE__)
+      Logger.error("#{inspect(value)} system crashed with error:\n#{exception}")
+      :error
+  end
+
+  # Permanents systems
+  defp execute(system, prev_tick) do
+    delta = now() - prev_tick
+    system.run(delta)
+    system
+  catch
+    kind, payload ->
+      exception = Exception.format(kind, payload, __STACKTRACE__)
+      Logger.error("#{inspect(system)} system crashed with error:\n#{exception}")
+      :error
+  end
+
+  defp batch_systems(systems, counter, acc \\ [], next \\ [], components \\ MapSet.new())
+
+  defp batch_systems([], _counter, acc, next, _components) do
+    {:lists.reverse(acc), :lists.reverse(next)}
+  end
+
+  defp batch_systems(remaining, 0, acc, next, _components) do
+    {:lists.reverse(acc), :lists.reverse(next) ++ remaining}
+  end
+
+  defp batch_systems([{system, _event} = value | remaining], counter, acc, next, components) do
+    case batch(system, components) do
+      :sync ->
+        batch_systems(remaining, 0, [value | acc], next, components)
+
+      :next ->
+        batch_systems(remaining, counter, acc, [value | next], components)
+
+      {:ok, new_components} ->
+        components = MapSet.union(components, MapSet.new(new_components))
+        batch_systems(remaining, counter - 1, [value | acc], next, components)
+    end
+  end
+
+  defp batch_systems([system | remaining], counter, acc, next, components) do
+    case batch(system, components) do
+      :sync ->
+        batch_systems(remaining, 0, [system | acc], next, components)
+
+      :next ->
+        batch_systems(remaining, counter, acc, [system | next], components)
+
+      {:ok, new_components} ->
+        components = MapSet.union(components, MapSet.new(new_components))
+        batch_systems(remaining, counter - 1, [system | acc], next, components)
+    end
+  end
+
+  defp batch(system, components) do
+    case {system.__lock_components__(), MapSet.size(components)} do
+      {:sync, 0} ->
+        :sync
+
+      {:sync, _} ->
+        :next
+
+      {lock_components, _} ->
+        not_member = Enum.map(lock_components, &(not MapSet.member?(components, &1)))
+        if Enum.all?(not_member), do: {:ok, lock_components}, else: :next
+    end
   end
 end
