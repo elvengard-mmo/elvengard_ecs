@@ -7,7 +7,7 @@ defmodule ElvenGard.ECS.Entity do
   alias ElvenGard.ECS.UUID
   alias ElvenGard.ECS.Component
 
-  @type id :: String.t() | integer()
+  @type id :: any()
   @type t :: %Entity{id: id()}
 
   @type spec :: %{
