@@ -45,22 +45,20 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
   end
 
   defmodule WithoutEventsSystem do
-    # use ElvenGard.ECS.System, lock_components: []
+    use ElvenGard.ECS.System, lock_components: []
 
-    def __event_subscriptions__(), do: nil
-    def __lock_components__(), do: :sync
-
+    @impl true
     def run(delta) do
       IO.puts("[WithoutEventsSystem] delta: #{delta}")
     end
   end
 
   defmodule WithEventsSystem do
-    # use ElvenGard.ECS.System, lock_components: []
+    use ElvenGard.ECS.System,
+      lock_components: [],
+      event_subscriptions: [Test1Event, Test2Event]
 
-    def __event_subscriptions__(), do: [Test1Event, Test2Event]
-    def __lock_components__(), do: []
-
+    @impl true
     def run(event, delta) do
       IO.puts("[WithEventsSystem] delta: #{delta} - event: #{inspect(event)}")
     end
