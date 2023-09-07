@@ -3,11 +3,18 @@ defmodule ElvenGard.ECS.Event do
   TODO: Documentation for ElvenGard.ECS.Event
   """
 
-  defmacro __using__(opts) do
-    fields = validate_fields(opts)
+  @type t :: struct()
 
-    quote bind_quoted: [fields: fields], location: :keep do
-      defstruct Keyword.put_new(fields, :inserted_at, nil)
+  @doc false
+  defmacro __using__(opts) do
+    fields =
+      opts
+      |> validate_fields()
+      |> Keyword.put_new(:partition, nil)
+      |> Keyword.put_new(:inserted_at, nil)
+
+    quote do
+      defstruct unquote(fields)
     end
   end
 
