@@ -3,5 +3,11 @@ defmodule ElvenGard.ECS do
   Documentation for `ElvenGard.ECS`.
   """
 
-  defguard is_entity(entity) when is_struct(entity) and entity.__type__ == :entity
+  alias ElvenGard.ECS.Event
+
+  ## Public API
+
+  @spec event(Event.t(), Keyword.t()) :: any()
+  def event(event, opts \\ []) do
+  end
 end
