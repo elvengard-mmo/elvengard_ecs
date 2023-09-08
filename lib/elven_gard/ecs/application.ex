@@ -9,7 +9,7 @@ defmodule ElvenGard.ECS.Application do
   def start(_type, _args) do
     children = [
       # FIXME: Hadcoded for now
-      {ElvenGard.ECS.MnesiaBackend.ClusterManager, []},
+      {ElvenGard.ECS.MnesiaBackend.ClusterManager, [retry: true]},
       {Config.backend(), []}
     ]
 
