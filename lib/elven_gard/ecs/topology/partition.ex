@@ -18,18 +18,20 @@ defmodule ElvenGard.ECS.Topology.Partition do
   ## Public API
 
   @doc false
-  defmacro __using__(_env) do
+  defmacro __using__(opts) do
     quote location: :keep do
       @behaviour unquote(__MODULE__)
 
       ## Public API
 
       def child_spec(opts) do
-        %{
-          id: unquote(__MODULE__),
+        default = %{
+          id: {unquote(__MODULE__), make_ref()},
           start: {unquote(__MODULE__), :start_link, [{__MODULE__, opts}]},
           restart: :temporary
         }
+
+        Supervisor.child_spec(default, unquote(Macro.escape(opts)))
       end
     end
   end
@@ -219,6 +221,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     end
   end
 
+  # FIXME: Sync -> stop loop
   defp batch(system, components) do
     case {system.__lock_components__(), MapSet.size(components)} do
       {:sync, 0} ->

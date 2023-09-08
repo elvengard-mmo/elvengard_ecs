@@ -10,7 +10,7 @@ defmodule ElvenGard.ECS.Event do
     fields =
       opts
       |> validate_fields()
-      |> Keyword.put_new(:partition, nil)
+      |> Keyword.put_new(:partition, :default)
       |> Keyword.put_new(:inserted_at, nil)
 
     quote do

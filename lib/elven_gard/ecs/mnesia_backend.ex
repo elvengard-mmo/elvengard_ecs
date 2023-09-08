@@ -26,14 +26,9 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Public API
 
-  @spec start_link(Keyword.t()) :: Supervisor.on_start()
+  @spec start_link(Keyword.t()) :: Task.on_start()
   def start_link(_opts) do
-    children = [
-      {ClusterManager, []},
-      {Task, &init_mnesia/0}
-    ]
-
-    Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__.Supervisor)
+    Task.start_link(__MODULE__, :init_mnesia, [])
   end
 
   ## Transactions
@@ -181,9 +176,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc false
   @spec init_mnesia() :: :ok
   def init_mnesia() do
-    # Connect to cluster
-    :ok = ClusterManager.connect_node()
-
     # Create tables
     {:atomic, :ok} =
       :mnesia.create_table(
