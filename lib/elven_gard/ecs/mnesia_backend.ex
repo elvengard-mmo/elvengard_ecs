@@ -108,12 +108,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> insert()
   end
 
-  @spec add_component(Entity.t(), Component.spec()) :: :ok
+  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
   def add_component(%Entity{id: id}, component_spec) do
-    component_spec
-    |> Component.spec_to_struct()
+    component = Component.spec_to_struct(component_spec)
+
+    component
     |> then(&component(type: &1.__struct__, owner_id: id, component: &1))
     |> insert()
+
+    component
   end
 
   ### Dirty operations

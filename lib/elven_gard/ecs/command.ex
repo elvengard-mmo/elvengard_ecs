@@ -37,8 +37,8 @@ defmodule ElvenGard.ECS.Command do
     fn ->
       with {:ok, entity} <- create_entity(specs),
            :ok <- set_children(entity, children),
-           :ok <- add_components(entity, components),
-           {:ok, _} <- push_spawn_events(entity, specs) do
+           components <- add_components(entity, components),
+           {:ok, _} <- push_spawn_events(entity, components, specs) do
         entity
       else
         {:error, reason} -> abort(reason)
@@ -58,7 +58,7 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
-  @spec add_component(Entity.t(), Component.spec()) :: :ok
+  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
   def add_component(%Entity{} = entity, component_spec) do
     Config.backend().add_component(entity, component_spec)
   end
@@ -79,11 +79,11 @@ defmodule ElvenGard.ECS.Command do
   end
 
   defp add_components(entity, components) do
-    Enum.each(components, &add_component(entity, &1))
+    Enum.map(components, &add_component(entity, &1))
   end
 
-  defp push_spawn_events(entity, specs) do
-    %{components: components, children: children, parent: parent} = specs
+  defp push_spawn_events(entity, components, specs) do
+    %{children: children, parent: parent} = specs
 
     entity_event = %EntitySpawned{
       entity: entity,
