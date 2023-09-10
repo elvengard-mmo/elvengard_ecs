@@ -6,6 +6,70 @@ defmodule ElvenGard.ECS.QueryTest do
 
   ## General
 
+  describe "select/2 + all/1" do
+    test "Entities + component modules + preload" do
+      %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
+
+      query =
+        Query.select(
+          ElvenGard.ECS.Entity,
+          with: [PositionComponent],
+          preload: [BuffComponent]
+        )
+
+      assert %Query{} = query
+
+      result = Query.all(query)
+      assert is_list(result)
+      assert length(result) == 3
+
+      assert bundle1 = Enum.find(result, &(elem(&1, 0).id == player1.id))
+      assert {^player1, components1} = bundle1
+      assert length(components1) == 3
+      assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components1
+      assert %BuffComponent{buff_id: 42} in components1
+      assert %BuffComponent{buff_id: 1337} in components1
+
+      assert bundle2 = Enum.find(result, &(elem(&1, 0).id == pet1.id))
+      assert {^pet1, components2} = bundle2
+      assert length(components2) == 1
+      assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components2
+
+      assert bundle3 = Enum.find(result, &(elem(&1, 0).id == player2.id))
+      assert {^player2, components3} = bundle3
+      assert length(components3) == 2
+      assert %PositionComponent{map_id: 2, pos_x: 0, pos_y: 0} in components3
+      assert %BuffComponent{buff_id: 42} in components1
+    end
+
+    test "Entities + component specs + preload" do
+      %{player1: player1, pet1: pet1, player2: _player2} = spawn_few_entities()
+
+      query =
+        Query.select(
+          ElvenGard.ECS.Entity,
+          with: [{PositionComponent, [{:==, :map_id, 1}]}],
+          preload: [BuffComponent]
+        )
+
+      assert %Query{} = query
+      assert result = Query.all(query)
+      assert length(result) == 2
+
+      assert bundle1 = Enum.find(result, &(elem(&1, 0).id == player1.id))
+      assert {^player1, components1} = bundle1
+      assert length(components1) == 3
+      assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components1
+      assert %BuffComponent{buff_id: 42} in components1
+      assert %BuffComponent{buff_id: 1337} in components1
+
+      assert bundle2 = Enum.find(result, &(elem(&1, 0).id == pet1.id))
+      assert {^pet1, components2} = bundle2
+      assert length(components2) == 1
+      assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components2
+    end
+  end
+
   describe "select_entities/1" do
     test "with parent" do
       %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()

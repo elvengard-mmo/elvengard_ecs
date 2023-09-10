@@ -5,13 +5,42 @@ defmodule ElvenGard.ECS.Query do
   TL;DR: Read from Backend
   """
 
+  alias __MODULE__
   alias ElvenGard.ECS.{Component, Config, Entity}
+
+  ## Struct
+
+  defstruct [:return_type, :with_components, :preload]
+
+  @typep component_module :: module()
+  @type t :: %Query{
+          return_type: Entity | component_module(),
+          with_components: [component_module() | {component_module(), [tuple()]}],
+          preload: [component_module()]
+        }
 
   ## Guards
 
   defguardp is_entity_id(id) when is_binary(id) or is_integer(id)
 
   ## General
+
+  @spec select(Entity | module(), Keyword.t()) :: t()
+  def select(type, query \\ []) do
+    with_components = Keyword.get(query, :with, [])
+    preload = Keyword.get(query, :preload, [])
+
+    %Query{
+      return_type: type,
+      with_components: with_components,
+      preload: preload
+    }
+  end
+
+  @spec all(Query.t()) :: list()
+  def all(%Query{} = query) do
+    Config.backend().all(query)
+  end
 
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
   def select_entities(query) do

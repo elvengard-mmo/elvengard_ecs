@@ -19,8 +19,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   import ElvenGard.ECS.MnesiaBackend.Records
 
   alias ElvenGard.ECS.Entity
+  alias ElvenGard.ECS.Query
   alias ElvenGard.ECS.{Component, Entity}
-  alias ElvenGard.ECS.MnesiaBackend.ClusterManager
 
   @timeout 5000
 
@@ -47,6 +47,18 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   ## General Queries
+
+  def all(%Query{return_type: Entity} = query) do
+    %Query{with_components: with_components, preload: preload} = query
+
+    with_components
+    |> Enum.flat_map(&query_components/1)
+    |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
+    |> Enum.map(fn {owner_id, components} ->
+      entity = build_entity_struct(owner_id)
+      {entity, components ++ do_preload(entity, preload)}
+    end)
+  end
 
   # TODO: Rewrite this fuction to me more generic and support operators like
   # "and", "or" and "multiple queries"
@@ -258,5 +270,27 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       [] -> :mnesia.write(record)
       _ -> :mnesia.abort(:already_exists)
     end
+  end
+
+  defp query_components(type) when is_atom(type) do
+    read({Component, type})
+  end
+
+  defp query_components({type, specs}) do
+    # TODO: Generate the select query
+    match = {Component, :"$1", :"$2", :"$3"}
+    guards = Enum.map(specs, fn {op, field, value} -> {op, {:map_get, field, :"$3"}, value} end)
+    guards = [{:==, :"$1", type} | guards]
+    result = [:"$_"]
+    query = [{match, guards, result}]
+
+    select(Component, query)
+  end
+
+  defp do_preload(entity, preload) do
+    Enum.flat_map(preload, fn mod ->
+      {:ok, components} = fetch_components(entity, mod)
+      components
+    end)
   end
 end
