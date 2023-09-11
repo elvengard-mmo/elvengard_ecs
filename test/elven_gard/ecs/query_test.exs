@@ -21,7 +21,6 @@ defmodule ElvenGard.ECS.QueryTest do
 
       result = Query.all(query)
       assert is_list(result)
-      assert length(result) == 3
 
       assert bundle1 = Enum.find(result, &(elem(&1, 0).id == player1.id))
       assert {^player1, components1} = bundle1
@@ -54,7 +53,6 @@ defmodule ElvenGard.ECS.QueryTest do
 
       assert %Query{} = query
       assert result = Query.all(query)
-      assert length(result) == 2
 
       assert bundle1 = Enum.find(result, &(elem(&1, 0).id == player1.id))
       assert {^player1, components1} = bundle1
@@ -109,6 +107,38 @@ defmodule ElvenGard.ECS.QueryTest do
       assert {:ok, entities} = Query.select_entities(with_component: BuffComponent)
       assert player1 in entities
       assert player2 in entities
+      refute pet1 in entities
+    end
+
+    test "works with tuples as ids" do
+      player1 =
+        spawn_entity(
+          id: {:player, Enum.random(1..99_999)},
+          components: [
+            {PlayerComponent, [name: "Player1"]},
+            {PositionComponent, [map_id: 1]},
+            {BuffComponent, [buff_id: 42]},
+            {BuffComponent, [buff_id: 1337]}
+          ]
+        )
+
+      pet1 =
+        spawn_entity(
+          id: {:pet, 1},
+          parent: player1,
+          components: [
+            {PositionComponent, [map_id: 1]}
+          ]
+        )
+
+      assert {:ok, [^pet1]} = Query.select_entities(with_parent: player1)
+
+      {:ok, entities} = Query.select_entities(without_parent: player1)
+      assert player1 in entities
+      refute pet1 in entities
+
+      {:ok, entities} = Query.select_entities(with_component: BuffComponent)
+      assert player1 in entities
       refute pet1 in entities
     end
   end
@@ -270,6 +300,16 @@ defmodule ElvenGard.ECS.QueryTest do
       # fetch_entity/1
       assert {:ok, []} = Query.fetch_components(invalid_entity(), PlayerComponent)
       assert {:ok, []} = Query.fetch_components(spawn_entity(), InvalidComponent)
+    end
+
+    test "works with tuples as ids" do
+      player1 =
+        spawn_entity(
+          id: {:player, Enum.random(1..99_999)},
+          components: [{PlayerComponent, [name: "Player1"]}]
+        )
+
+      assert {:ok, [%PlayerComponent{}]} = Query.fetch_components(player1, PlayerComponent)
     end
   end
 

@@ -72,7 +72,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   def select_entities(without_parent: parent) do
     match = {Entity, :"$1", :"$2"}
-    guards = [{:"=/=", :"$2", parent_id(parent)}]
+    guards = [{:"=/=", :"$2", escape_id(parent_id(parent))}]
     return = [:"$1"]
     query = [{match, guards, return}]
 
@@ -86,6 +86,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     {Component, component}
     |> read()
     |> Enum.map(&component(&1, :owner_id))
+    |> Enum.uniq()
     |> Enum.map(&build_entity_struct/1)
     |> then(&{:ok, &1})
   end
@@ -179,7 +180,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   def fetch_components(%Entity{id: owner_id}, component) do
     # TODO: Generate the select query
     match = {Component, :"$1", :"$2", :"$3"}
-    guards = [{:==, :"$1", component}, {:==, :"$2", owner_id}]
+    guards = [{:==, :"$1", component}, {:==, :"$2", escape_id(owner_id)}]
     result = [:"$3"]
     query = [{match, guards, result}]
 
@@ -217,6 +218,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp parent_id(%Entity{id: id}), do: id
 
   defp build_entity_struct(id), do: %Entity{id: id}
+
+  # I don't know why but you need to wrap tuples inside another tuple in select/dirty_select
+  defp escape_id(id) when is_tuple(id), do: {id}
+  defp escape_id(id), do: id
 
   defp record_to_struct(entity_record) do
     entity_record
@@ -281,7 +286,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp query_components({type, specs}) do
     # TODO: Generate the select query
-    match = {Component, :"$1", :"$2", :"$3"}
+    match = {Component, :"$1", :_, :"$3"}
     guards = Enum.map(specs, fn {op, field, value} -> {op, {:map_get, field, :"$3"}, value} end)
     guards = [{:==, :"$1", type} | guards]
     result = [:"$_"]
