@@ -246,22 +246,22 @@ defmodule ElvenGard.ECS.QueryTest do
 
   ## Tests - Components
 
-  describe "components/1" do
+  describe "list_components/1" do
     test "returns a list of components for an Entity" do
       entity = spawn_entity()
-      assert {:ok, []} = Query.components(entity)
+      assert {:ok, []} = Query.list_components(entity)
 
       entity2 = spawn_entity(components: [PlayerComponent])
-      assert {:ok, [player_component2]} = Query.components(entity2)
+      assert {:ok, [player_component2]} = Query.list_components(entity2)
       assert %PlayerComponent{name: "Player"} = player_component2
 
       entity3 = spawn_entity(components: [{PlayerComponent, [name: "TestPlayer"]}])
-      assert {:ok, [player_component3]} = Query.components(entity3)
+      assert {:ok, [player_component3]} = Query.list_components(entity3)
       assert %PlayerComponent{name: "TestPlayer"} = player_component3
 
       components4 = [{PlayerComponent, []}, {PositionComponent, [pos_x: 13, pos_y: 37]}]
       entity4 = spawn_entity(components: components4)
-      assert {:ok, [player_component4, position_component4]} = Query.components(entity4)
+      assert {:ok, [player_component4, position_component4]} = Query.list_components(entity4)
       assert %PlayerComponent{name: "Player"} = player_component4
       assert %PositionComponent{map_id: 1, pos_x: 13, pos_y: 37} = position_component4
     end
@@ -271,7 +271,7 @@ defmodule ElvenGard.ECS.QueryTest do
       # This is a design choice to focus on performance
       # For concistency, the System should check that the parent exists with
       # fetch_entity/1
-      assert {:ok, []} = Query.components(invalid_entity())
+      assert {:ok, []} = Query.list_components(invalid_entity())
     end
   end
 

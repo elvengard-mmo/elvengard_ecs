@@ -46,9 +46,22 @@ defmodule ElvenGard.ECS.CommandTest do
         )
 
       assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
-      assert {:ok, [player_component, position_component]} = Query.components(entity)
+      assert {:ok, [player_component, position_component]} = Query.list_components(entity)
       assert %PlayerComponent{name: "Player"} = player_component
       assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} = position_component
+    end
+  end
+
+  describe "despawn_entity/2" do
+    test "despawn an Entity" do
+      # Spawn a dummy Entity
+      {:ok, entity} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, ^entity} = Query.fetch_entity(entity.id)
+
+      # Despawn it
+      assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
+      assert components == []
+      assert {:error, :not_found} = Query.fetch_entity(entity.id)
     end
   end
 
@@ -73,11 +86,11 @@ defmodule ElvenGard.ECS.CommandTest do
   describe "add_component/2" do
     test "add a Component to an Entity" do
       entity = spawn_entity()
-      assert {:ok, []} = Query.components(entity)
+      assert {:ok, []} = Query.list_components(entity)
 
       # Add a first Component
       assert %PlayerComponent{name: "Player"} = Command.add_component(entity, PlayerComponent)
-      {:ok, components} = Query.components(entity)
+      {:ok, components} = Query.list_components(entity)
       assert length(components) == 1
       assert %PlayerComponent{name: "Player"} in components
 
@@ -85,7 +98,7 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 42} =
                Command.add_component(entity, {BuffComponent, [buff_id: 42]})
 
-      {:ok, components} = Query.components(entity)
+      {:ok, components} = Query.list_components(entity)
       assert length(components) == 2
       assert %PlayerComponent{name: "Player"} in components
       assert %BuffComponent{buff_id: 42} in components
@@ -94,7 +107,7 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 1337} =
                Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
 
-      {:ok, components} = Query.components(entity)
+      {:ok, components} = Query.list_components(entity)
       assert length(components) == 3
       assert %PlayerComponent{name: "Player"} in components
       assert %BuffComponent{buff_id: 42} in components
@@ -104,7 +117,7 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 1337} =
                Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
 
-      {:ok, components} = Query.components(entity)
+      {:ok, components} = Query.list_components(entity)
       assert length(components) == 3
       assert %PlayerComponent{name: "Player"} in components
       assert %BuffComponent{buff_id: 42} in components

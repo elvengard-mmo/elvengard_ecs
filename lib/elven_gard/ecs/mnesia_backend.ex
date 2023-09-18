@@ -103,25 +103,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  @spec set_parent(Entity.t(), Entity.t()) :: :ok
-  def set_parent(%Entity{id: id}, parent) do
-    entity(id: id, parent_id: parent_id(parent))
-    |> insert()
-  end
-
-  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
-  def add_component(%Entity{id: id}, component_spec) do
-    component = Component.spec_to_struct(component_spec)
-
-    component
-    |> then(&component(type: &1.__struct__, owner_id: id, component: &1))
-    |> insert()
-
-    component
-  end
-
-  ### Dirty operations
-
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
     case read({Entity, id}) do
@@ -137,6 +118,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       [{Entity, ^id, nil}] -> {:ok, nil}
       [{Entity, ^id, parent_id}] -> {:ok, build_entity_struct(parent_id)}
     end
+  end
+
+  @spec set_parent(Entity.t(), Entity.t()) :: :ok
+  def set_parent(%Entity{id: id}, parent) do
+    entity(id: id, parent_id: parent_id(parent))
+    |> insert()
   end
 
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
@@ -166,8 +153,26 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  @spec components(Entity.t()) :: {:ok, [Component.t()]}
-  def components(%Entity{id: id}) do
+  @spec delete_entity(Entity.t()) :: :ok
+  def delete_entity(%Entity{id: id}) do
+    delete({Entity, id})
+  end
+
+  ### Components
+
+  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
+  def add_component(%Entity{id: id}, component_spec) do
+    component = Component.spec_to_struct(component_spec)
+
+    component
+    |> then(&component(type: &1.__struct__, owner_id: id, component: &1))
+    |> insert()
+
+    component
+  end
+
+  @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
+  def list_components(%Entity{id: id}) do
     Component
     |> index_read(id, :owner_id)
     # Keep only the component
@@ -185,6 +190,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     query = [{match, guards, result}]
 
     {:ok, select(Component, query)}
+  end
+
+  @spec delete_components_for(Entity.t()) :: {:ok, [Component.t()]}
+  def delete_components_for(%Entity{id: owner_id}) do
+    components = index_read(Component, owner_id, :owner_id)
+    Enum.each(components, &delete_object(&1))
+    {:ok, Enum.map(components, &component(&1, :component))}
   end
 
   ## Internal API
@@ -227,6 +239,20 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     entity_record
     |> entity(:id)
     |> build_entity_struct()
+  end
+
+  defp delete(tuple) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.delete(tuple)
+      false -> :mnesia.dirty_delete(tuple)
+    end
+  end
+
+  defp delete_object(object) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.delete_object(object)
+      false -> :mnesia.dirty_delete_object(object)
+    end
   end
 
   defp read(tuple) do

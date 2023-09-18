@@ -96,9 +96,9 @@ defmodule ElvenGard.ECS.Query do
   @doc """
   Lists all the components for a given entity.
   """
-  @spec components(Entity.t()) :: {:ok, [Component.t()]}
-  def components(%Entity{} = entity) do
-    Config.backend().components(entity)
+  @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
+  def list_components(%Entity{} = entity) do
+    Config.backend().list_components(entity)
   end
 
   @doc """

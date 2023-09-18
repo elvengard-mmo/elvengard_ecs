@@ -5,7 +5,7 @@ defmodule ElvenGard.ECS.Command do
   TL;DR: Write in Backend (DIRTY or Transaction depending on the context)
   """
 
-  alias ElvenGard.ECS.{Config, Entity}
+  alias ElvenGard.ECS.{Component, Config, Entity}
 
   ## Transactions
 
@@ -40,6 +40,20 @@ defmodule ElvenGard.ECS.Command do
       else
         {:error, reason} -> abort(reason)
       end
+    end
+    |> transaction()
+  end
+
+  @spec despawn_entity(Entity.t(), (Entity.t(), [Component.t()] -> :delete | :update)) ::
+          {:ok, {Entity.t(), [Component.t()]}} | {:error, any}
+  @doc """
+  Transactional way to despawn an Entity
+  """
+  def despawn_entity(%Entity{} = entity, _on_child_delete_ \\ fn _, _ -> :delete end) do
+    fn ->
+      {:ok, components} = Config.backend().delete_components_for(entity)
+      :ok = Config.backend().delete_entity(entity)
+      {entity, components}
     end
     |> transaction()
   end
