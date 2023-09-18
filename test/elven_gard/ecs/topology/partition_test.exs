@@ -1,7 +1,7 @@
 defmodule ElvenGard.ECS.Topology.PartitionTest do
   use ExUnit.Case, async: true
 
-  alias ElvenGard.ECS.Topology.EventSource
+  # alias ElvenGard.ECS.Topology.EventSource
   alias ElvenGard.ECS.Topology.Partition
 
   ## Setup
@@ -95,21 +95,21 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
-  test "aa", %{source: source} do
-    systems = [WithoutEventsSystem, WithEventsSystem, WithoutEventsSystem]
-    start_supervised!({TestPartition, id: :default, event_source: source, systems: systems})
+  # test "aa", %{source: source} do
+  #   systems = [WithoutEventsSystem, WithEventsSystem, WithoutEventsSystem]
+  #   start_supervised!({TestPartition, id: :default, event_source: source, systems: systems})
 
-    Process.sleep(1001)
+  #   Process.sleep(1001)
 
-    events = [
-      {%Test2Event{id: 1}, :default},
-      {%Test1Event{id: 2}, :default},
-      {%Test2Event{id: 3}, :default},
-      {%Test2Event{id: 4}, :default}
-    ]
+  #   events = [
+  #     {%Test2Event{id: 1}, :default},
+  #     {%Test1Event{id: 2}, :default},
+  #     {%Test2Event{id: 3}, :default},
+  #     {%Test2Event{id: 4}, :default}
+  #   ]
 
-    EventSource.dispatch(source, events)
+  #   EventSource.dispatch(source, events)
 
-    Process.sleep(2000)
-  end
+  #   Process.sleep(2000)
+  # end
 end

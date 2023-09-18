@@ -5,8 +5,6 @@ defmodule ElvenGard.ECS.Command do
   TL;DR: Write in Backend (DIRTY or Transaction depending on the context)
   """
 
-  alias ElvenGard.ECS
-  alias ElvenGard.ECS.Events.{EntitySpawned, ComponentCreated}
   alias ElvenGard.ECS.{Config, Entity}
 
   ## Transactions
@@ -37,8 +35,7 @@ defmodule ElvenGard.ECS.Command do
     fn ->
       with {:ok, entity} <- create_entity(specs),
            :ok <- set_children(entity, children),
-           components <- add_components(entity, components),
-           {:ok, _} <- push_spawn_events(entity, components, specs) do
+           :ok <- add_components(entity, components) do
         entity
       else
         {:error, reason} -> abort(reason)
@@ -79,20 +76,6 @@ defmodule ElvenGard.ECS.Command do
   end
 
   defp add_components(entity, components) do
-    Enum.map(components, &add_component(entity, &1))
-  end
-
-  defp push_spawn_events(entity, components, specs) do
-    %{children: children, parent: parent} = specs
-
-    entity_event = %EntitySpawned{
-      entity: entity,
-      components: components,
-      children: children,
-      parent: parent
-    }
-
-    events = Enum.map(components, &%ComponentCreated{entity: entity, component: &1})
-    ECS.push([entity_event | events], partition: :system)
+    Enum.each(components, &add_component(entity, &1))
   end
 end

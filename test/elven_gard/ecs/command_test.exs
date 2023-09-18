@@ -76,20 +76,24 @@ defmodule ElvenGard.ECS.CommandTest do
       assert {:ok, []} = Query.components(entity)
 
       # Add a first Component
-      assert :ok = Command.add_component(entity, PlayerComponent)
+      assert %PlayerComponent{name: "Player"} = Command.add_component(entity, PlayerComponent)
       {:ok, components} = Query.components(entity)
       assert length(components) == 1
       assert %PlayerComponent{name: "Player"} in components
 
       # Add a second Component
-      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 42]})
+      assert %BuffComponent{buff_id: 42} =
+               Command.add_component(entity, {BuffComponent, [buff_id: 42]})
+
       {:ok, components} = Query.components(entity)
       assert length(components) == 2
       assert %PlayerComponent{name: "Player"} in components
       assert %BuffComponent{buff_id: 42} in components
 
       # Add the same Component
-      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      assert %BuffComponent{buff_id: 1337} =
+               Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+
       {:ok, components} = Query.components(entity)
       assert length(components) == 3
       assert %PlayerComponent{name: "Player"} in components
@@ -97,7 +101,9 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 1337} in components
 
       # Add the same buff: Mnesia doesn't support duplicate_bag
-      assert :ok = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      assert %BuffComponent{buff_id: 1337} =
+               Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+
       {:ok, components} = Query.components(entity)
       assert length(components) == 3
       assert %PlayerComponent{name: "Player"} in components
