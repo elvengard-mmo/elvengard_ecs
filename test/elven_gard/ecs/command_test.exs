@@ -56,7 +56,6 @@ defmodule ElvenGard.ECS.CommandTest do
     test "despawn an Entity" do
       # Spawn a dummy Entity
       {:ok, entity} = Command.spawn_entity(Entity.entity_spec())
-      {:ok, ^entity} = Query.fetch_entity(entity.id)
 
       # Despawn it
       assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
@@ -75,13 +74,75 @@ defmodule ElvenGard.ECS.CommandTest do
         )
 
       {:ok, entity} = Command.spawn_entity(Entity.entity_spec(specs))
-      {:ok, ^entity} = Query.fetch_entity(entity.id)
 
       # Despawn it
       assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
       assert %PlayerComponent{name: "Player"} in components
       assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} in components
       assert {:error, :not_found} = Query.fetch_entity(entity.id)
+    end
+
+    test "with children on delete (default behaviour)" do
+      # Spawn dummy Entities
+      {:ok, parent} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec(parent: parent))
+      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(parent: parent))
+
+      # Despawn the parent
+      assert {:ok, {^parent, []}} = Command.despawn_entity(parent)
+      assert {:error, :not_found} = Query.fetch_entity(parent.id)
+      assert {:error, :not_found} = Query.fetch_entity(entity1.id)
+      assert {:error, :not_found} = Query.fetch_entity(entity2.id)
+    end
+
+    test "with children on delete callback" do
+      # Spawn dummy Entities
+      parent_comp = [PlayerComponent, {PositionComponent, [map_id: 42]}]
+      c1_comp = [{PositionComponent, [map_id: 42]}]
+      c2_comp = [{BuffComponent, [buff_id: 1337]}]
+
+      {:ok, parent} = Command.spawn_entity(Entity.entity_spec(components: parent_comp))
+
+      {:ok, child1} =
+        Command.spawn_entity(Entity.entity_spec(parent: parent, components: c1_comp))
+
+      {:ok, child2} =
+        Command.spawn_entity(Entity.entity_spec(parent: parent, components: c2_comp))
+
+      # Despawn the parent
+      fun = fn entity, components ->
+        send(self(), {:despawn, entity, components})
+        :delete
+      end
+
+      assert {:ok, {^parent, [_, _]}} = Command.despawn_entity(parent, fun)
+      assert {:error, :not_found} = Query.fetch_entity(parent.id)
+      assert {:error, :not_found} = Query.fetch_entity(child1.id)
+      assert {:error, :not_found} = Query.fetch_entity(child2.id)
+
+      assert_received {:despawn, ^child1, [%PositionComponent{map_id: 42, pos_x: 0, pos_y: 0}]}
+      assert_received {:despawn, ^child2, [%BuffComponent{buff_id: 1337}]}
+    end
+
+    test "with children on delete cascade" do
+      # Spawn dummy Entities
+      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(parent: entity1))
+      {:ok, entity3} = Command.spawn_entity(Entity.entity_spec(parent: entity2))
+
+      # Despawn entity1 and delete entity2 and entity3 on cascade
+      fun = fn entity, components ->
+        send(self(), {:despawn, entity, components})
+        :delete
+      end
+
+      assert {:ok, {^entity1, []}} = Command.despawn_entity(entity1, fun)
+      assert {:error, :not_found} = Query.fetch_entity(entity1.id)
+      assert {:error, :not_found} = Query.fetch_entity(entity2.id)
+      assert {:error, :not_found} = Query.fetch_entity(entity3.id)
+
+      assert_received {:despawn, ^entity2, []}
+      assert_received {:despawn, ^entity3, []}
     end
   end
 
