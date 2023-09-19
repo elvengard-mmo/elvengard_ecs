@@ -10,13 +10,13 @@ defmodule ElvenGard.ECS.Query do
 
   ## Struct
 
-  defstruct [:return_type, :with_components, :preload]
+  defstruct [:return_type, :components, :mandatories]
 
   @typep component_module :: module()
   @type t :: %Query{
           return_type: Entity | component_module(),
-          with_components: [component_module() | {component_module(), [tuple()]}],
-          preload: [component_module()]
+          components: [Component.spec()],
+          mandatories: [component_module()]
         }
 
   ## General
@@ -26,36 +26,26 @@ defmodule ElvenGard.ECS.Query do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])
 
-    # If the return type is not part of with_components, add it to with_components
-    extended_with_components =
-      case type do
-        Entity ->
-          with_components
+    components = List.flatten([with_components | preload])
+    component_mods = Enum.map(components, &components_modules/1)
+    mandatories = Enum.map(with_components, &components_modules/1)
 
-        module ->
-          component_mods = Enum.map(with_components, &components_modules/1)
-          if module in component_mods, do: with_components, else: [module | with_components]
+    # If the return type is not part of components to find, add it
+    {components, mandatories} =
+      if type != Entity and type not in component_mods do
+        {[type | components], [type | mandatories]}
+      else
+        {components, mandatories}
       end
-
-    # Get all required components modules
-    extended_component_mods = Enum.map(extended_with_components, &components_modules/1)
-
-    # Remove required components from preloads
-    cleaned_preload = preload -- extended_component_mods
 
     %Query{
       return_type: type,
-      with_components: extended_with_components,
-      preload: cleaned_preload
+      components: components,
+      mandatories: mandatories
     }
   end
 
   @spec all(Query.t()) :: list()
-  def all(%Query{return_type: Entity, with_components: []}) do
-    {:ok, entities} = Config.backend().list_entities()
-    entities
-  end
-
   def all(%Query{} = query) do
     Config.backend().all(query)
   end

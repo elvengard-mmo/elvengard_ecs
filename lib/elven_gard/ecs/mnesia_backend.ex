@@ -49,28 +49,16 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   ## General Queries
 
   def all(query) do
-    %Query{return_type: return_type, with_components: with_components, preload: preload} = query
+    %Query{return_type: type, components: components, mandatories: mandatories} = query
 
-    with_components
+    components
     |> Enum.flat_map(&query_components/1)
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
-    |> Enum.filter(&has_all_components(&1, with_components))
-    |> Enum.map(fn {owner_id, components} ->
-      entity = build_entity_struct(owner_id)
-      {entity, components ++ do_preload(entity, preload)}
-    end)
-    |> Enum.flat_map(&select_return_type(&1, return_type))
+    |> Enum.filter(&has_all_components(&1, mandatories))
+    |> apply_return_type(type, mandatories)
   end
 
   ### Entities
-
-  @spec list_entities() :: {:ok, [Entity.t()]}
-  def list_entities() do
-    Entity
-    |> all_keys()
-    |> Enum.map(&build_entity_struct/1)
-    |> then(&{:ok, &1})
-  end
 
   # TODO: Rewrite this fuction to me more generic and support operators like
   # "and", "or" and "multiple queries"
@@ -338,30 +326,28 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     select(Component, query)
   end
 
-  defp has_all_components({_entity_id, components}, required_list) do
-    required_modules =
-      required_list
-      |> Enum.map(fn
-        {module, _attrs} -> module
-        module -> module
-      end)
-      |> Enum.uniq()
-
-    component_modules = components |> Enum.map(& &1.__struct__) |> Enum.uniq()
-
-    required_modules -- component_modules == []
+  defp has_all_components({_entity_id, components}, mandatories) do
+    component_modules = Enum.map(components, & &1.__struct__)
+    mandatories -- component_modules == []
   end
 
-  defp do_preload(entity, preload) do
-    Enum.flat_map(preload, fn mod ->
-      {:ok, components} = fetch_components(entity, mod)
-      components
-    end)
+  defp apply_return_type(tuples, Entity, []) do
+    mapping = Map.new(tuples)
+
+    Entity
+    # If no required component, we must get all Entities
+    |> all_keys()
+    # Then just add components if found
+    |> Enum.map(&{build_entity_struct(&1), Map.get(mapping, &1, [])})
   end
 
-  defp select_return_type(tuple, Entity), do: [tuple]
+  defp apply_return_type(tuples, Entity, _) do
+    Enum.map(tuples, fn {id, components} -> {build_entity_struct(id), components} end)
+  end
 
-  defp select_return_type({_entity, components}, component_name) do
-    Enum.filter(components, &(&1.__struct__ == component_name))
+  defp apply_return_type(tuples, component_mod, _) do
+    tuples
+    |> Enum.flat_map(&elem(&1, 1))
+    |> Enum.filter(&(&1.__struct__ == component_mod))
   end
 end

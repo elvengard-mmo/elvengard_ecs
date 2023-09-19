@@ -11,7 +11,17 @@ defmodule ElvenGard.ECS.QueryTest do
       entity = spawn_entity()
 
       query = Query.select(Entity)
-      assert entity in Query.all(query)
+      assert {entity, []} in Query.all(query)
+    end
+
+    test "Entities list all + preload" do
+      entity = spawn_entity(components: [PlayerComponent])
+
+      query = Query.select(Entity, preload: [BuffComponent])
+      assert {entity, []} in Query.all(query)
+
+      query = Query.select(Entity, preload: [PlayerComponent])
+      assert {entity, [%PlayerComponent{}]} in Query.all(query)
     end
 
     test "Entities + component modules + preload" do
