@@ -63,6 +63,26 @@ defmodule ElvenGard.ECS.CommandTest do
       assert components == []
       assert {:error, :not_found} = Query.fetch_entity(entity.id)
     end
+
+    test "with components" do
+      # Spawn a dummy Entity
+      specs =
+        Entity.entity_spec(
+          components: [
+            PlayerComponent,
+            {PositionComponent, [map_id: 42]}
+          ]
+        )
+
+      {:ok, entity} = Command.spawn_entity(Entity.entity_spec(specs))
+      {:ok, ^entity} = Query.fetch_entity(entity.id)
+
+      # Despawn it
+      assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
+      assert %PlayerComponent{name: "Player"} in components
+      assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} in components
+      assert {:error, :not_found} = Query.fetch_entity(entity.id)
+    end
   end
 
   describe "set_parent/2" do
