@@ -26,10 +26,27 @@ defmodule ElvenGard.ECS.Query do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])
 
+    # If the return type is not part of with_components, add it to with_components
+    extended_with_components =
+      case type do
+        Entity ->
+          with_components
+
+        module ->
+          component_mods = Enum.map(with_components, &components_modules/1)
+          if module in component_mods, do: with_components, else: [module | with_components]
+      end
+
+    # Get all required components modules
+    extended_component_mods = Enum.map(extended_with_components, &components_modules/1)
+
+    # Remove required components from preloads
+    cleaned_preload = preload -- extended_component_mods
+
     %Query{
       return_type: type,
-      with_components: with_components,
-      preload: preload
+      with_components: extended_with_components,
+      preload: cleaned_preload
     }
   end
 
@@ -116,4 +133,9 @@ defmodule ElvenGard.ECS.Query do
       _ -> raise "#{inspect(entity)} have more that 1 component of type #{inspect(component)}"
     end
   end
+
+  ## Helpers
+
+  defp components_modules({module, _attrs}) when is_atom(module), do: module
+  defp components_modules(module) when is_atom(module), do: module
 end

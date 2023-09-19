@@ -78,6 +78,25 @@ defmodule ElvenGard.ECS.QueryTest do
       result = Query.all(query)
       refute Enum.find(result, &match?({^entity, _}, &1))
     end
+
+    test "Components list all" do
+      ref = make_ref()
+      _entity = spawn_entity(components: [{PositionComponent, map_id: ref}])
+
+      query = Query.select(PositionComponent)
+      assert %PositionComponent{map_id: ref} in Query.all(query)
+    end
+
+    test "Components + with" do
+      ref1 = make_ref()
+      ref2 = make_ref()
+      _entity = spawn_entity(components: [PlayerComponent, {PositionComponent, map_id: ref1}])
+      _entity = spawn_entity(components: [{PositionComponent, map_id: ref2}])
+
+      query = Query.select(PositionComponent, with: [PlayerComponent])
+      assert %PositionComponent{map_id: ref1} in Query.all(query)
+      refute %PositionComponent{map_id: ref2} in Query.all(query)
+    end
   end
 
   describe "select_entities/1" do

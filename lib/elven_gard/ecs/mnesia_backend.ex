@@ -48,8 +48,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
-  def all(%Query{return_type: Entity} = query) do
-    %Query{with_components: with_components, preload: preload} = query
+  def all(query) do
+    %Query{return_type: return_type, with_components: with_components, preload: preload} = query
 
     with_components
     |> Enum.flat_map(&query_components/1)
@@ -59,6 +59,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       entity = build_entity_struct(owner_id)
       {entity, components ++ do_preload(entity, preload)}
     end)
+    |> Enum.flat_map(&select_return_type(&1, return_type))
   end
 
   # TODO: Rewrite this fuction to me more generic and support operators like
@@ -341,5 +342,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       {:ok, components} = fetch_components(entity, mod)
       components
     end)
+  end
+
+  defp select_return_type(tuple, Entity), do: [tuple]
+
+  defp select_return_type({_entity, components}, component_name) do
+    Enum.filter(components, &(&1.__struct__ == component_name))
   end
 end
