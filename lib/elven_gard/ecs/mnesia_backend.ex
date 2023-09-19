@@ -54,6 +54,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     with_components
     |> Enum.flat_map(&query_components/1)
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
+    |> Enum.filter(&has_all_components(&1, with_components))
     |> Enum.map(fn {owner_id, components} ->
       entity = build_entity_struct(owner_id)
       {entity, components ++ do_preload(entity, preload)}
@@ -319,6 +320,20 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     query = [{match, guards, result}]
 
     select(Component, query)
+  end
+
+  defp has_all_components({_entity_id, components}, required_list) do
+    required_modules =
+      required_list
+      |> Enum.map(fn
+        {module, _attrs} -> module
+        module -> module
+      end)
+      |> Enum.uniq()
+
+    component_modules = components |> Enum.map(& &1.__struct__) |> Enum.uniq()
+
+    required_modules -- component_modules == []
   end
 
   defp do_preload(entity, preload) do

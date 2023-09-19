@@ -66,6 +66,18 @@ defmodule ElvenGard.ECS.QueryTest do
       assert length(components2) == 1
       assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components2
     end
+
+    test "Entities + with option returns only if every components match" do
+      entity = spawn_entity(components: [PlayerComponent, {BuffComponent, buff_id: 123}])
+
+      query = Query.select(ElvenGard.ECS.Entity, with: [PlayerComponent, BuffComponent])
+      result = Query.all(query)
+      assert Enum.find(result, &match?({^entity, _}, &1))
+
+      query = Query.select(ElvenGard.ECS.Entity, with: [PlayerComponent, PositionComponent])
+      result = Query.all(query)
+      refute Enum.find(result, &match?({^entity, _}, &1))
+    end
   end
 
   describe "select_entities/1" do
