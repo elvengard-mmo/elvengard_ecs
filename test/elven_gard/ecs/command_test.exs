@@ -144,6 +144,30 @@ defmodule ElvenGard.ECS.CommandTest do
       assert_received {:despawn, ^entity2, []}
       assert_received {:despawn, ^entity3, []}
     end
+
+    test "with children on ignore callback" do
+      # Spawn dummy Entities
+      ref = make_ref()
+      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(id: ref, parent: entity1))
+      {:ok, entity3} = Command.spawn_entity(Entity.entity_spec(parent: entity2))
+
+      # Despawn entity1 but keep entity2 and entity3
+      fun = fn entity, components ->
+        send(self(), {:despawn, entity, components})
+
+        # Keep only entity3
+        if entity.id == ref, do: :ignore, else: :delete
+      end
+
+      assert {:ok, {^entity1, []}} = Command.despawn_entity(entity1, fun)
+      assert {:error, :not_found} = Query.fetch_entity(entity1.id)
+      assert {:ok, ^entity2} = Query.fetch_entity(entity2.id)
+      assert {:ok, ^entity3} = Query.fetch_entity(entity3.id)
+
+      assert_received {:despawn, ^entity2, []}
+      refute_received {:despawn, ^entity3, []}
+    end
   end
 
   describe "set_parent/2" do

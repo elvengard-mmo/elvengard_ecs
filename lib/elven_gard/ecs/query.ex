@@ -19,10 +19,6 @@ defmodule ElvenGard.ECS.Query do
           preload: [component_module()]
         }
 
-  ## Guards
-
-  defguardp is_entity_id(id) when is_binary(id) or is_integer(id)
-
   ## General
 
   @spec select(Entity | module(), Keyword.t()) :: t()
@@ -53,7 +49,7 @@ defmodule ElvenGard.ECS.Query do
   Fetches an `ElvenGard.ECS.Entity.t()` by its ID.
   """
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
-  def fetch_entity(id) when is_entity_id(id) do
+  def fetch_entity(id) do
     Config.backend().fetch_entity(id)
   end
 

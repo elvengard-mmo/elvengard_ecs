@@ -44,7 +44,7 @@ defmodule ElvenGard.ECS.Command do
     |> transaction()
   end
 
-  @spec despawn_entity(Entity.t(), (Entity.t(), [Component.t()] -> :delete | :update)) ::
+  @spec despawn_entity(Entity.t(), (Entity.t(), [Component.t()] -> :delete | :ignore)) ::
           {:ok, {Entity.t(), [Component.t()]}} | {:error, any}
   @doc """
   Transactional way to despawn an Entity
@@ -108,14 +108,14 @@ defmodule ElvenGard.ECS.Command do
     Enum.each(components, &add_component(entity, &1))
   end
 
-  defp maybe_despawn_child({_tuple, :update}, _on_child_delete), do: :ok
+  defp maybe_despawn_child({_tuple, :ignore}, _on_child_delete), do: :ok
 
   defp maybe_despawn_child({{entity, _components}, :delete}, on_child_delete) do
     despawn_entity(entity, on_child_delete)
   end
 
   defp maybe_despawn_child({tuple, value}, _on_child_delete) do
-    raise "on_child_delete/2 must returns :update or :delete. " <>
+    raise "on_child_delete/2 must returns :ignore or :delete. " <>
             "Got #{inspect(value)} for #{inspect(tuple, limit: :infinity)}"
   end
 end
