@@ -62,6 +62,16 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.flat_map(&select_return_type(&1, return_type))
   end
 
+  ### Entities
+
+  @spec list_entities() :: {:ok, [Entity.t()]}
+  def list_entities() do
+    Entity
+    |> all_keys()
+    |> Enum.map(&build_entity_struct/1)
+    |> then(&{:ok, &1})
+  end
+
   # TODO: Rewrite this fuction to me more generic and support operators like
   # "and", "or" and "multiple queries"
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
@@ -92,8 +102,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.map(&build_entity_struct/1)
     |> then(&{:ok, &1})
   end
-
-  ### Entities
 
   @spec create_entity(Entity.id(), Entity.t()) :: {:ok, Entity.t()} | {:error, :already_exists}
   def create_entity(id, parent) do
@@ -241,6 +249,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     entity_record
     |> entity(:id)
     |> build_entity_struct()
+  end
+
+  defp all_keys(tab) do
+    case :mnesia.is_transaction() do
+      true -> :mnesia.all_keys(tab)
+      false -> :mnesia.dirty_all_keys(tab)
+    end
   end
 
   defp delete(tuple) do

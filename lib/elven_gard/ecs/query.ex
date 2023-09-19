@@ -51,6 +51,11 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @spec all(Query.t()) :: list()
+  def all(%Query{return_type: Entity, with_components: []}) do
+    {:ok, entities} = Config.backend().list_entities()
+    entities
+  end
+
   def all(%Query{} = query) do
     Config.backend().all(query)
   end

@@ -1,12 +1,19 @@
 defmodule ElvenGard.ECS.QueryTest do
   use ElvenGard.ECS.EntityCase, async: true
 
-  alias ElvenGard.ECS.Query
+  alias ElvenGard.ECS.{Entity, Query}
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
 
   ## General
 
   describe "select/2 + all/1" do
+    test "Entities list all" do
+      entity = spawn_entity()
+
+      query = Query.select(Entity)
+      assert entity in Query.all(query)
+    end
+
     test "Entities + component modules + preload" do
       %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
 
