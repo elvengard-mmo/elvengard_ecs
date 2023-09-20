@@ -14,7 +14,7 @@ defmodule ElvenGard.ECS.EntityCase do
   def invalid_entity(), do: %Entity{id: "<invalid>"}
 
   def spawn_entity(attrs \\ []) do
-    {:ok, entity} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
+    {:ok, {entity, _components}} = attrs |> Entity.entity_spec() |> Command.spawn_entity()
     entity
   end
 end

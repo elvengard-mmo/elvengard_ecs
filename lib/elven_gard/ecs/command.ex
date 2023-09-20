@@ -24,19 +24,19 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   Transactional way to spawn an Entity
   """
-  @spec spawn_entity(Entity.spec()) :: {:ok, Entity.t()} | {:error, reason}
+  @spec spawn_entity(Entity.spec()) :: {:ok, {Entity.t(), Component.t()}} | {:error, reason}
         when reason: :already_exists | :cant_set_children
   def spawn_entity(specs) when is_map(specs) do
     %{
-      components: components,
+      components: components_specs,
       children: children
     } = specs
 
     fn ->
       with {:ok, entity} <- create_entity(specs),
            :ok <- set_children(entity, children),
-           :ok <- add_components(entity, components) do
-        entity
+           components <- add_components(entity, components_specs) do
+        {entity, components}
       else
         {:error, reason} -> abort(reason)
       end
@@ -132,7 +132,9 @@ defmodule ElvenGard.ECS.Command do
   end
 
   defp add_components(entity, components) do
-    Enum.each(components, &add_component(entity, &1))
+    components
+    |> Enum.map(&add_component(entity, &1))
+    |> Enum.map(fn {:ok, component} -> component end)
   end
 
   defp maybe_despawn_child({_tuple, :ignore}, _on_child_delete), do: :ok

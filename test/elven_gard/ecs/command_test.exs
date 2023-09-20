@@ -10,26 +10,28 @@ defmodule ElvenGard.ECS.CommandTest do
     test "spawn an Entity with default specs" do
       specs = Entity.entity_spec()
 
-      assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
+      assert {:ok, {entity, components}} = Command.spawn_entity(specs)
+      assert %Entity{} = entity
       assert specs.id == entity.id
+      assert components == []
 
       assert {:error, :already_exists} = Command.spawn_entity(specs)
     end
 
     test "spawn an Entity with parent spec" do
-      {:ok, parent} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, {parent, []}} = Command.spawn_entity(Entity.entity_spec())
       specs = Entity.entity_spec(parent: parent)
 
-      assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
+      assert {:ok, {entity, []}} = Command.spawn_entity(specs)
       assert {:ok, ^parent} = Query.parent(entity)
     end
 
     test "spawn an Entity with children spec" do
-      {:ok, child1} = Command.spawn_entity(Entity.entity_spec())
-      {:ok, child2} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, {child1, []}} = Command.spawn_entity(Entity.entity_spec())
+      {:ok, {child2, []}} = Command.spawn_entity(Entity.entity_spec())
       specs = Entity.entity_spec(children: [child1, child2])
 
-      assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
+      assert {:ok, {entity, []}} = Command.spawn_entity(specs)
       assert {:ok, children} = Query.children(entity)
       assert length(children) == 2
       assert child1 in children
@@ -45,7 +47,11 @@ defmodule ElvenGard.ECS.CommandTest do
           ]
         )
 
-      assert {:ok, %Entity{} = entity} = Command.spawn_entity(specs)
+      assert {:ok, {entity, components}} = Command.spawn_entity(specs)
+      assert length(components) == 2
+      assert %PlayerComponent{} in components
+      assert %PositionComponent{map_id: 42} in components
+
       assert {:ok, [player_component, position_component]} = Query.list_components(entity)
       assert %PlayerComponent{name: "Player"} = player_component
       assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} = position_component
@@ -55,7 +61,7 @@ defmodule ElvenGard.ECS.CommandTest do
   describe "despawn_entity/2" do
     test "despawn an Entity" do
       # Spawn a dummy Entity
-      {:ok, entity} = Command.spawn_entity(Entity.entity_spec())
+      entity = spawn_entity(Entity.entity_spec())
 
       # Despawn it
       assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
@@ -73,7 +79,7 @@ defmodule ElvenGard.ECS.CommandTest do
           ]
         )
 
-      {:ok, entity} = Command.spawn_entity(Entity.entity_spec(specs))
+      entity = spawn_entity(Entity.entity_spec(specs))
 
       # Despawn it
       assert {:ok, {^entity, components}} = Command.despawn_entity(entity)
@@ -84,9 +90,9 @@ defmodule ElvenGard.ECS.CommandTest do
 
     test "with children on delete (default behaviour)" do
       # Spawn dummy Entities
-      {:ok, parent} = Command.spawn_entity(Entity.entity_spec())
-      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec(parent: parent))
-      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(parent: parent))
+      parent = spawn_entity(Entity.entity_spec())
+      entity1 = spawn_entity(Entity.entity_spec(parent: parent))
+      entity2 = spawn_entity(Entity.entity_spec(parent: parent))
 
       # Despawn the parent
       assert {:ok, {^parent, []}} = Command.despawn_entity(parent)
@@ -101,13 +107,9 @@ defmodule ElvenGard.ECS.CommandTest do
       c1_comp = [{PositionComponent, [map_id: 42]}]
       c2_comp = [{BuffComponent, [buff_id: 1337]}]
 
-      {:ok, parent} = Command.spawn_entity(Entity.entity_spec(components: parent_comp))
-
-      {:ok, child1} =
-        Command.spawn_entity(Entity.entity_spec(parent: parent, components: c1_comp))
-
-      {:ok, child2} =
-        Command.spawn_entity(Entity.entity_spec(parent: parent, components: c2_comp))
+      parent = spawn_entity(Entity.entity_spec(components: parent_comp))
+      child1 = spawn_entity(Entity.entity_spec(parent: parent, components: c1_comp))
+      child2 = spawn_entity(Entity.entity_spec(parent: parent, components: c2_comp))
 
       # Despawn the parent
       fun = fn entity, components ->
@@ -126,9 +128,9 @@ defmodule ElvenGard.ECS.CommandTest do
 
     test "with children on delete cascade" do
       # Spawn dummy Entities
-      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec())
-      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(parent: entity1))
-      {:ok, entity3} = Command.spawn_entity(Entity.entity_spec(parent: entity2))
+      entity1 = spawn_entity(Entity.entity_spec())
+      entity2 = spawn_entity(Entity.entity_spec(parent: entity1))
+      entity3 = spawn_entity(Entity.entity_spec(parent: entity2))
 
       # Despawn entity1 and delete entity2 and entity3 on cascade
       fun = fn entity, components ->
@@ -148,9 +150,9 @@ defmodule ElvenGard.ECS.CommandTest do
     test "with children on ignore callback" do
       # Spawn dummy Entities
       ref = make_ref()
-      {:ok, entity1} = Command.spawn_entity(Entity.entity_spec())
-      {:ok, entity2} = Command.spawn_entity(Entity.entity_spec(id: ref, parent: entity1))
-      {:ok, entity3} = Command.spawn_entity(Entity.entity_spec(parent: entity2))
+      entity1 = spawn_entity(Entity.entity_spec())
+      entity2 = spawn_entity(Entity.entity_spec(id: ref, parent: entity1))
+      entity3 = spawn_entity(Entity.entity_spec(parent: entity2))
 
       # Despawn entity1 but keep entity2 and entity3
       fun = fn entity, components ->
