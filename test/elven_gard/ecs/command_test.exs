@@ -194,14 +194,16 @@ defmodule ElvenGard.ECS.CommandTest do
       assert {:ok, []} = Query.list_components(entity)
 
       # Add a first Component
-      assert %PlayerComponent{name: "Player"} = Command.add_component(entity, PlayerComponent)
+      {:ok, component} = Command.add_component(entity, PlayerComponent)
+      assert %PlayerComponent{name: "Player"} = component
+
       {:ok, components} = Query.list_components(entity)
       assert length(components) == 1
       assert %PlayerComponent{name: "Player"} in components
 
       # Add a second Component
-      assert %BuffComponent{buff_id: 42} =
-               Command.add_component(entity, {BuffComponent, [buff_id: 42]})
+      {:ok, component} = Command.add_component(entity, {BuffComponent, [buff_id: 42]})
+      assert %BuffComponent{buff_id: 42} = component
 
       {:ok, components} = Query.list_components(entity)
       assert length(components) == 2
@@ -209,8 +211,8 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 42} in components
 
       # Add the same Component
-      assert %BuffComponent{buff_id: 1337} =
-               Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      {:ok, component} = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      assert %BuffComponent{buff_id: 1337} = component
 
       {:ok, components} = Query.list_components(entity)
       assert length(components) == 3
@@ -219,8 +221,8 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 1337} in components
 
       # Add the same buff: Mnesia doesn't support duplicate_bag
-      assert %BuffComponent{buff_id: 1337} =
-               Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      {:ok, component} = Command.add_component(entity, {BuffComponent, [buff_id: 1337]})
+      assert %BuffComponent{buff_id: 1337} = component
 
       {:ok, components} = Query.list_components(entity)
       assert length(components) == 3

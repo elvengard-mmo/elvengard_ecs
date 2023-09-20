@@ -10,7 +10,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   Component Table
 
-    | component_type | owner_id | component |
+    | {owner_id, component_type} | owner_id | component_type | component |
 
   """
 
@@ -83,8 +83,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   def select_entities(with_component: component) when is_atom(component) do
-    {Component, component}
-    |> read()
+    Component
+    |> index_read(component, :type)
     |> Enum.map(&component(&1, :owner_id))
     |> Enum.uniq()
     |> Enum.map(&build_entity_struct/1)
@@ -158,15 +158,22 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ### Components
 
-  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
+  @spec add_component(Entity.t(), Component.spec()) :: {:ok, Component.t()}
   def add_component(%Entity{id: id}, component_spec) do
     component = Component.spec_to_struct(component_spec)
 
     component
-    |> then(&component(type: &1.__struct__, owner_id: id, component: &1))
+    |> then(
+      &component(
+        composite_key: {id, &1.__struct__},
+        owner_id: id,
+        type: &1.__struct__,
+        component: &1
+      )
+    )
     |> insert()
 
-    component
+    {:ok, component}
   end
 
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
@@ -181,13 +188,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
   def fetch_components(%Entity{id: owner_id}, component) do
-    # TODO: Generate the select query
-    match = {Component, :"$1", :"$2", :"$3"}
-    guards = [{:==, :"$1", component}, {:==, :"$2", escape_id(owner_id)}]
-    result = [:"$3"]
-    query = [{match, guards, result}]
-
-    {:ok, select(Component, query)}
+    {Component, {owner_id, component}}
+    |> read()
+    |> Enum.map(&component(&1, :component))
+    |> then(&{:ok, &1})
   end
 
   @spec delete_components_for(Entity.t()) :: {:ok, [Component.t()]}
@@ -215,8 +219,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       :mnesia.create_table(
         Component,
         type: :bag,
-        attributes: [:type, :owner_id, :component],
-        index: [:owner_id]
+        attributes: [:composite_key, :owner_id, :type, :component],
+        index: [:owner_id, :type]
       )
 
     :ok = :mnesia.wait_for_tables([Entity, Component], @timeout)
@@ -312,14 +316,14 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp query_components(type) when is_atom(type) do
-    read({Component, type})
+    index_read(Component, type, :type)
   end
 
   defp query_components({type, specs}) do
     # TODO: Generate the select query
-    match = {Component, :"$1", :_, :"$3"}
-    guards = Enum.map(specs, fn {op, field, value} -> {op, {:map_get, field, :"$3"}, value} end)
-    guards = [{:==, :"$1", type} | guards]
+    match = {Component, :_, :_, :"$3", :"$4"}
+    guards = Enum.map(specs, fn {op, field, value} -> {op, {:map_get, field, :"$4"}, value} end)
+    guards = [{:==, :"$3", type} | guards]
     result = [:"$_"]
     query = [{match, guards, result}]
 

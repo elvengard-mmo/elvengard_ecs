@@ -6,13 +6,14 @@ defmodule ElvenGard.ECS.MnesiaBackend.Records do
   alias ElvenGard.ECS.{Component, Entity}
 
   defrecord :entity, Entity, id: nil, parent_id: nil
-  defrecord :component, Component, type: nil, owner_id: nil, component: nil
+  defrecord :component, Component, composite_key: nil, owner_id: nil, type: nil, component: nil
 
   @type entity :: record(:entity, id: Entity.t(), parent_id: Entity.id())
   @type component ::
           record(:component,
-            type: Component.type(),
+            composite_key: {owner_id :: Entity.id(), type :: Component.type()},
             owner_id: Entity.id(),
+            type: Component.type(),
             component: Component.t()
           )
 end
