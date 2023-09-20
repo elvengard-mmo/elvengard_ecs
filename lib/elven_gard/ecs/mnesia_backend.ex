@@ -176,6 +176,17 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     {:ok, component}
   end
 
+  @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
+  def delete_component(%Entity{id: id}, component) when is_atom(component) do
+    delete({Component, {id, component}})
+  end
+
+  def delete_component(%Entity{id: id}, %component_mod{} = component) do
+    read({Component, {id, component_mod}})
+    |> Enum.filter(&(component(&1, :component) == component))
+    |> Enum.each(&delete_object/1)
+  end
+
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
   def list_components(%Entity{id: id}) do
     Component

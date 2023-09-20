@@ -231,4 +231,37 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 1337} in components
     end
   end
+
+  describe "delete_component/2" do
+    test "by type" do
+      components = [PlayerComponent, {BuffComponent, buff_id: 12}, {BuffComponent, buff_id: 34}]
+      entity = spawn_entity(components: components)
+      {:ok, [_, _, _]} = Query.list_components(entity)
+
+      assert :ok = Command.delete_component(entity, PlayerComponent)
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 2
+      refute %PlayerComponent{} in components
+
+      assert :ok = Command.delete_component(entity, BuffComponent)
+      assert {:ok, []} = Query.list_components(entity)
+    end
+
+    test "by structure" do
+      components = [PlayerComponent, {BuffComponent, buff_id: 12}, {BuffComponent, buff_id: 34}]
+      entity = spawn_entity(components: components)
+      {:ok, [_, _, _]} = Query.list_components(entity)
+
+      assert :ok = Command.delete_component(entity, %PlayerComponent{})
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 2
+      refute %PlayerComponent{} in components
+
+      assert :ok = Command.delete_component(entity, %BuffComponent{buff_id: 12})
+      assert {:ok, [%BuffComponent{buff_id: 34}]} = Query.list_components(entity)
+
+      assert :ok = Command.delete_component(entity, %BuffComponent{buff_id: 34})
+      assert {:ok, []} = Query.list_components(entity)
+    end
+  end
 end

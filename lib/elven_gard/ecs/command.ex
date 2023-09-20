@@ -87,6 +87,14 @@ defmodule ElvenGard.ECS.Command do
     Config.backend().add_component(entity, component_spec)
   end
 
+  @doc """
+  TODO: Documentation
+  """
+  @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
+  def delete_component(%Entity{} = entity, component) do
+    Config.backend().delete_component(entity, component)
+  end
+
   ## Components
 
   ## Private helpers
