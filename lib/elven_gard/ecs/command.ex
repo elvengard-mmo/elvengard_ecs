@@ -82,9 +82,9 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
-  @spec add_component(Entity.t(), Component.spec()) :: Component.t()
-  def add_component(%Entity{} = entity, component_spec) do
-    Config.backend().add_component(entity, component_spec)
+  @spec add_component(Entity.t(), Component.spec() | Component.t()) :: Component.t()
+  def add_component(%Entity{} = entity, component_or_spec) do
+    Config.backend().add_component(entity, component_or_spec)
   end
 
   @doc """
@@ -93,6 +93,14 @@ defmodule ElvenGard.ECS.Command do
   @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
   def delete_component(%Entity{} = entity, component) do
     Config.backend().delete_component(entity, component)
+  end
+
+  @doc """
+  TODO: Documentation
+  """
+  @spec replace_component(Entity.t(), Component.t()) :: :ok
+  def replace_component(%Entity{} = entity, component) do
+    Config.backend().replace_component(entity, component)
   end
 
   ## Components

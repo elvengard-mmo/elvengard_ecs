@@ -189,7 +189,7 @@ defmodule ElvenGard.ECS.CommandTest do
   end
 
   describe "add_component/2" do
-    test "add a Component to an Entity" do
+    test "add a Component specs to an Entity" do
       entity = spawn_entity()
       assert {:ok, []} = Query.list_components(entity)
 
@@ -230,6 +230,48 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %BuffComponent{buff_id: 42} in components
       assert %BuffComponent{buff_id: 1337} in components
     end
+
+    test "add a Component structure to an Entity" do
+      entity = spawn_entity()
+      assert {:ok, []} = Query.list_components(entity)
+
+      # Add a first Component
+      {:ok, component} = Command.add_component(entity, %PlayerComponent{})
+      assert %PlayerComponent{name: "Player"} = component
+
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 1
+      assert %PlayerComponent{name: "Player"} in components
+
+      # Add a second Component
+      {:ok, component} = Command.add_component(entity, %BuffComponent{buff_id: 42})
+      assert %BuffComponent{buff_id: 42} = component
+
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 2
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+
+      # Add the same Component
+      {:ok, component} = Command.add_component(entity, %BuffComponent{buff_id: 1337})
+      assert %BuffComponent{buff_id: 1337} = component
+
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 3
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+      assert %BuffComponent{buff_id: 1337} in components
+
+      # Add the same buff: Mnesia doesn't support duplicate_bag
+      {:ok, component} = Command.add_component(entity, %BuffComponent{buff_id: 1337})
+      assert %BuffComponent{buff_id: 1337} = component
+
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 3
+      assert %PlayerComponent{name: "Player"} in components
+      assert %BuffComponent{buff_id: 42} in components
+      assert %BuffComponent{buff_id: 1337} in components
+    end
   end
 
   describe "delete_component/2" do
@@ -262,6 +304,17 @@ defmodule ElvenGard.ECS.CommandTest do
 
       assert :ok = Command.delete_component(entity, %BuffComponent{buff_id: 34})
       assert {:ok, []} = Query.list_components(entity)
+    end
+  end
+
+  describe "replace_component/2" do
+    test "by structure" do
+      entity = spawn_entity(components: [PlayerComponent])
+      {:ok, [%PlayerComponent{name: "Player"}]} = Query.list_components(entity)
+
+      assert :ok = Command.replace_component(entity, %PlayerComponent{name: "ImNotAPlayer"})
+      {:ok, [component]} = Query.list_components(entity)
+      assert %PlayerComponent{name: "ImNotAPlayer"} = component
     end
   end
 end

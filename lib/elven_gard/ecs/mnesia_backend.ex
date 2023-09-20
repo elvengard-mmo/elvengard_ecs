@@ -158,22 +158,21 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ### Components
 
-  @spec add_component(Entity.t(), Component.spec()) :: {:ok, Component.t()}
-  def add_component(%Entity{id: id}, component_spec) do
-    component = Component.spec_to_struct(component_spec)
-
-    component
-    |> then(
-      &component(
-        composite_key: {id, &1.__struct__},
-        owner_id: id,
-        type: &1.__struct__,
-        component: &1
-      )
+  @spec add_component(Entity.t(), Component.spec() | Component.t()) :: {:ok, Component.t()}
+  def add_component(%Entity{id: id}, %component_mod{} = component) do
+    component(
+      composite_key: {id, component_mod},
+      owner_id: id,
+      type: component_mod,
+      component: component
     )
     |> insert()
 
     {:ok, component}
+  end
+
+  def add_component(entity, component_spec) do
+    add_component(entity, Component.spec_to_struct(component_spec))
   end
 
   @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
@@ -185,6 +184,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     read({Component, {id, component_mod}})
     |> Enum.filter(&(component(&1, :component) == component))
     |> Enum.each(&delete_object/1)
+  end
+
+  @spec replace_component(Entity.t(), Component.t()) :: :ok
+  def replace_component(entity, %component_mod{} = component) do
+    :ok = delete_component(entity, component_mod)
+    {:ok, _} = add_component(entity, component)
+    :ok
   end
 
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
