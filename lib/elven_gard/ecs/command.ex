@@ -99,8 +99,19 @@ defmodule ElvenGard.ECS.Command do
   TODO: Documentation
   """
   @spec replace_component(Entity.t(), Component.t()) :: :ok
-  def replace_component(%Entity{} = entity, component) do
-    Config.backend().replace_component(entity, component)
+  def replace_component(%Entity{} = entity, %component_mod{} = component) do
+    :ok = Config.backend().delete_component(entity, component_mod)
+    {:ok, _} = Config.backend().add_component(entity, component)
+    :ok
+  end
+
+  @doc """
+  TODO: Documentation
+  """
+  @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
+          {:ok, Component.t()} | {:error, :not_found | :multiple_values}
+  def update_component(%Entity{} = entity, component, attrs) do
+    Config.backend().update_component(entity, component, attrs)
   end
 
   ## Components

@@ -186,11 +186,45 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.each(&delete_object/1)
   end
 
-  @spec replace_component(Entity.t(), Component.t()) :: :ok
-  def replace_component(entity, %component_mod{} = component) do
-    :ok = delete_component(entity, component_mod)
-    {:ok, _} = add_component(entity, component)
-    :ok
+  @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
+          {:ok, Component.t()} | {:error, :not_found | :multiple_values}
+  def update_component(%Entity{id: owner_id} = entity, %component_mod{} = component, attrs) do
+    components =
+      {Component, {owner_id, component_mod}}
+      |> read()
+      |> Enum.filter(&(component(&1, :component) == component))
+
+    case components do
+      [] ->
+        {:error, :not_found}
+
+      [record] ->
+        :ok = delete_object(record)
+        component = record |> component(:component) |> struct!(attrs)
+        add_component(entity, component)
+
+      _ ->
+        # Normally this case shouldn't be possible because Mnesia doesn't support duplicate bag
+        {:error, :multiple_values}
+    end
+  end
+
+  def update_component(%Entity{id: owner_id} = entity, component_mod, attrs)
+      when is_atom(component_mod) do
+    components = read({Component, {owner_id, component_mod}})
+
+    case components do
+      [] ->
+        {:error, :not_found}
+
+      [record] ->
+        :ok = delete_object(record)
+        component = record |> component(:component) |> struct!(attrs)
+        add_component(entity, component)
+
+      _ ->
+        {:error, :multiple_values}
+    end
   end
 
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}

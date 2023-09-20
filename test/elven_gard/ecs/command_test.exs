@@ -308,13 +308,70 @@ defmodule ElvenGard.ECS.CommandTest do
   end
 
   describe "replace_component/2" do
-    test "by structure" do
+    test "for a single component" do
       entity = spawn_entity(components: [PlayerComponent])
       {:ok, [%PlayerComponent{name: "Player"}]} = Query.list_components(entity)
 
       assert :ok = Command.replace_component(entity, %PlayerComponent{name: "ImNotAPlayer"})
       {:ok, [component]} = Query.list_components(entity)
       assert %PlayerComponent{name: "ImNotAPlayer"} = component
+    end
+
+    test "override multiple components" do
+      components = [{BuffComponent, buff_id: 12}, {BuffComponent, buff_id: 34}]
+      entity = spawn_entity(components: components)
+      {:ok, [_, _]} = Query.list_components(entity)
+
+      assert :ok = Command.replace_component(entity, %BuffComponent{buff_id: 1337})
+      {:ok, components} = Query.list_components(entity)
+      assert [%BuffComponent{buff_id: 1337}] = components
+    end
+  end
+
+  describe "update_component/3" do
+    test "can update a component by type" do
+      components = [PlayerComponent]
+      entity = spawn_entity(components: components)
+      {:ok, [%PlayerComponent{}]} = Query.list_components(entity)
+
+      assert {:ok, component} =
+               Command.update_component(entity, PlayerComponent, name: "TestPlayer")
+
+      assert %PlayerComponent{name: "TestPlayer"} = component
+      assert {:ok, [%PlayerComponent{name: "TestPlayer"}]} = Query.list_components(entity)
+    end
+
+    test "can update a component by structure" do
+      components = [{BuffComponent, buff_id: 12}, {BuffComponent, buff_id: 34}]
+      entity = spawn_entity(components: components)
+      {:ok, [_, _]} = Query.list_components(entity)
+
+      assert {:ok, component} =
+               Command.update_component(entity, %BuffComponent{buff_id: 12}, buff_id: 1337)
+
+      assert %BuffComponent{buff_id: 1337} = component
+
+      {:ok, components} = Query.list_components(entity)
+      assert length(components) == 2
+      assert %BuffComponent{buff_id: 34} in components
+      assert %BuffComponent{buff_id: 1337} in components
+    end
+
+    test "returns an error if no component found" do
+      entity = spawn_entity(components: [{BuffComponent, buff_id: 1}])
+
+      assert {:error, :not_found} = Command.update_component(entity, PlayerComponent, name: "")
+
+      assert {:error, :not_found} =
+               Command.update_component(entity, %BuffComponent{buff_id: 2}, buff_id: 9)
+    end
+
+    test "returns an error if multiple components found" do
+      components = [{BuffComponent, buff_id: 1}, {BuffComponent, buff_id: 2}]
+      entity = spawn_entity(components: components)
+
+      assert {:error, :multiple_values} =
+               Command.update_component(entity, BuffComponent, buff_id: 123)
     end
   end
 end
