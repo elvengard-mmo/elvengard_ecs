@@ -116,6 +116,43 @@ defmodule ElvenGard.ECS.QueryTest do
     end
   end
 
+  describe "select/2 + one/1" do
+    test "can return an Entity" do
+      ref = make_ref()
+      entity = spawn_entity(components: [{PositionComponent, map_id: ref}])
+
+      query = Query.select(Entity, with: [{PositionComponent, [{:==, :map_id, ref}]}])
+      assert {^entity, [%PositionComponent{map_id: ^ref}]} = Query.one(query)
+    end
+
+    test "can return a Component" do
+      ref = make_ref()
+      _ = spawn_entity(components: [{PositionComponent, map_id: ref}])
+
+      query = Query.select(PositionComponent, with: [{PositionComponent, [{:==, :map_id, ref}]}])
+      assert %PositionComponent{map_id: ^ref} = Query.one(query)
+    end
+
+    test "returns nil if nothing found" do
+      ref = make_ref()
+
+      query = Query.select(PositionComponent, with: [{PositionComponent, [{:==, :map_id, ref}]}])
+      assert Query.one(query) == nil
+    end
+
+    test "raises if more than one result" do
+      ref = make_ref()
+      _ = spawn_entity(components: [{PositionComponent, map_id: ref}])
+      _ = spawn_entity(components: [{PositionComponent, map_id: ref}])
+
+      query = Query.select(PositionComponent, with: [{PositionComponent, [{:==, :map_id, ref}]}])
+
+      assert_raise RuntimeError, ~r/Expected to return one result, got: /, fn ->
+        Query.one(query)
+      end
+    end
+  end
+
   describe "select_entities/1" do
     test "with parent" do
       %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()

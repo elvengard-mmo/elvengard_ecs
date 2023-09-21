@@ -14,7 +14,8 @@ defmodule ElvenGard.ECS.MixProject do
       name: @app_name,
       description: "Game server toolkit written in Elixir # ECS",
       deps: deps(),
-      elixirc_paths: elixirc_paths(Mix.env())
+      elixirc_paths: elixirc_paths(Mix.env()),
+      elixirc_options: [warnings_as_errors: true]
     ]
   end
 

@@ -45,9 +45,18 @@ defmodule ElvenGard.ECS.Query do
     }
   end
 
-  @spec all(Query.t()) :: list()
+  @spec all(Query.t()) :: [{Entity.t(), [Component.t()]} | Component.t()]
   def all(%Query{} = query) do
     Config.backend().all(query)
+  end
+
+  @spec one(Query.t()) :: nil | {Entity.t(), [Component.t()]} | Component.t()
+  def one(%Query{} = query) do
+    case Config.backend().all(query) do
+      [] -> nil
+      [result] -> result
+      results -> raise "Expected to return one result, got: `#{inspect(results)}`"
+    end
   end
 
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
