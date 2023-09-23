@@ -24,7 +24,7 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   Transactional way to spawn an Entity
   """
-  @spec spawn_entity(Entity.spec()) :: {:ok, {Entity.t(), Component.t()}} | {:error, reason}
+  @spec spawn_entity(Entity.spec()) :: {:ok, {Entity.t(), [Component.t()]}} | {:error, reason}
         when reason: :already_exists | :cant_set_children
   def spawn_entity(specs) when is_map(specs) do
     %{
