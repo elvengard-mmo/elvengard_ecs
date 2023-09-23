@@ -24,6 +24,39 @@ defmodule ElvenGard.ECS.QueryTest do
       assert {entity, [%PlayerComponent{}]} in Query.all(query)
     end
 
+    test "Entities + preload :all" do
+      ref = make_ref()
+      entity1 = spawn_entity()
+      entity2 = spawn_entity(components: [{PlayerComponent, name: "Entity2"}])
+      entity3 = spawn_entity(components: [PlayerComponent, {PositionComponent, map_id: ref}])
+
+      # Get all Entities with all Components
+      query = Query.select(ElvenGard.ECS.Entity, preload: :all)
+      result = Query.all(query)
+      assert {entity1, []} in result
+      assert {entity2, [%PlayerComponent{name: "Entity2"}]} in result
+      assert {entity3, [%PlayerComponent{}, %PositionComponent{map_id: ref}]} in result
+
+      # Get Entities with all Components but with at least a specific component
+      query = Query.select(ElvenGard.ECS.Entity, with: [PlayerComponent], preload: :all)
+      result = Query.all(query)
+      refute {entity1, []} in result
+      assert {entity2, [%PlayerComponent{name: "Entity2"}]} in result
+      assert {entity3, [%PlayerComponent{}, %PositionComponent{map_id: ref}]} in result
+
+      # Get Entities with all Components but with at least a specific component with a specific state
+      query =
+        Query.select(ElvenGard.ECS.Entity,
+          with: [{PlayerComponent, [{:==, :name, "Entity2"}]}],
+          preload: :all
+        )
+
+      result = Query.all(query)
+      refute {entity1, []} in result
+      assert {entity2, [%PlayerComponent{name: "Entity2"}]} in result
+      refute {entity3, [%PlayerComponent{}, %PositionComponent{map_id: ref}]} in result
+    end
+
     test "Entities + component modules + preload" do
       %{player1: player1, pet1: pet1, player2: player2} = spawn_few_entities()
 

@@ -10,13 +10,14 @@ defmodule ElvenGard.ECS.Query do
 
   ## Struct
 
-  defstruct [:return_type, :components, :mandatories]
+  defstruct [:return_type, :components, :mandatories, :preload_all]
 
   @typep component_module :: module()
   @type t :: %Query{
           return_type: Entity | component_module(),
           components: [Component.spec()],
-          mandatories: [component_module()]
+          mandatories: [component_module()],
+          preload_all: boolean()
         }
 
   ## General
@@ -26,7 +27,13 @@ defmodule ElvenGard.ECS.Query do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])
 
-    components = List.flatten([with_components | preload])
+    preload_list =
+      case preload do
+        :all -> []
+        value -> value
+      end
+
+    components = List.flatten([with_components | preload_list])
     component_mods = Enum.map(components, &components_modules/1)
     mandatories = Enum.map(with_components, &components_modules/1)
 
@@ -41,7 +48,8 @@ defmodule ElvenGard.ECS.Query do
     %Query{
       return_type: type,
       components: components,
-      mandatories: mandatories
+      mandatories: mandatories,
+      preload_all: preload == :all
     }
   end
 

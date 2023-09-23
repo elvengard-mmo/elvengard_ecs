@@ -49,13 +49,19 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   ## General Queries
 
   def all(query) do
-    %Query{return_type: type, components: components, mandatories: mandatories} = query
+    %Query{
+      return_type: type,
+      components: components,
+      mandatories: mandatories,
+      preload_all: preload_all
+    } = query
 
     components
     |> Enum.flat_map(&query_components/1)
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
     |> Enum.filter(&has_all_components(&1, mandatories))
     |> apply_return_type(type, mandatories)
+    |> maybe_preload_all(type, preload_all)
   end
 
   ### Entities
@@ -405,4 +411,14 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.flat_map(&elem(&1, 1))
     |> Enum.filter(&(&1.__struct__ == component_mod))
   end
+
+  defp maybe_preload_all(entities, Entity, true) do
+    entities
+    |> Enum.map(fn {entity, _} ->
+      {:ok, components} = list_components(entity)
+      {entity, components}
+    end)
+  end
+
+  defp maybe_preload_all(entities, _type, _preload_all), do: entities
 end
