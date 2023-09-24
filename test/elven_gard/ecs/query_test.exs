@@ -55,6 +55,14 @@ defmodule ElvenGard.ECS.QueryTest do
       refute {entity1, []} in result
       assert {entity2, [%PlayerComponent{name: "Entity2"}]} in result
       refute {entity3, [%PlayerComponent{}, %PositionComponent{map_id: ref}]} in result
+
+      # Get all Entities and return tuple
+      query = Query.select({ElvenGard.ECS.Entity, PositionComponent}, preload: :all)
+
+      result = Query.all(query)
+      assert {entity1, nil} in result
+      assert {entity2, nil} in result
+      assert {entity3, %PositionComponent{map_id: ref}} in result
     end
 
     test "Entities + component modules + preload" do
@@ -146,6 +154,46 @@ defmodule ElvenGard.ECS.QueryTest do
       query = Query.select(PositionComponent, with: [PlayerComponent])
       assert %PositionComponent{map_id: ref1} in Query.all(query)
       refute %PositionComponent{map_id: ref2} in Query.all(query)
+    end
+
+    test "Tuple as return_type" do
+      ref = make_ref()
+      entity1 = spawn_entity()
+      entity2 = spawn_entity(components: [{PlayerComponent, name: "Entity2"}])
+      entity3 = spawn_entity(components: [PlayerComponent, {PositionComponent, map_id: ref}])
+
+      # Get all Entities
+      query = Query.select({ElvenGard.ECS.Entity})
+      result = Query.all(query)
+      assert {entity1} in result
+      assert {entity2} in result
+      assert {entity3} in result
+
+      # Get all Entities with PlayerComponent and return only Entity
+      query = Query.select({ElvenGard.ECS.Entity}, with: [PlayerComponent])
+      result = Query.all(query)
+      refute {entity1} in result
+      assert {entity2} in result
+      assert {entity3} in result
+
+      # Get all Entities with PlayerComponent
+      query = Query.select({ElvenGard.ECS.Entity, PlayerComponent}, with: [PlayerComponent])
+      result = Query.all(query)
+      refute {entity1, nil} in result
+      assert {entity2, %PlayerComponent{name: "Entity2"}} in result
+      assert {entity3, %PlayerComponent{}} in result
+
+      # Get all Entities with PlayerComponent and preload PositionComponent
+      query =
+        Query.select({ElvenGard.ECS.Entity, PlayerComponent, PositionComponent},
+          with: [PlayerComponent],
+          preload: [PositionComponent]
+        )
+
+      result = Query.all(query)
+      refute {entity1, nil, nil} in result
+      assert {entity2, %PlayerComponent{name: "Entity2"}, nil} in result
+      assert {entity3, %PlayerComponent{}, %PositionComponent{map_id: ref}} in result
     end
   end
 

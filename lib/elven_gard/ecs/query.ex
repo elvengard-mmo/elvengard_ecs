@@ -10,14 +10,15 @@ defmodule ElvenGard.ECS.Query do
 
   ## Struct
 
-  defstruct [:return_type, :components, :mandatories, :preload_all]
+  defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity]
 
   @typep component_module :: module()
   @type t :: %Query{
           return_type: Entity | component_module(),
           components: [Component.spec()],
           mandatories: [component_module()],
-          preload_all: boolean()
+          preload_all: boolean(),
+          return_entity: boolean()
         }
 
   ## General
@@ -33,23 +34,50 @@ defmodule ElvenGard.ECS.Query do
         value -> value
       end
 
+    preload_list =
+      case type do
+        tuple when is_tuple(tuple) ->
+          tuple
+          |> Tuple.to_list()
+          |> Enum.reject(&(&1 == Entity))
+          |> then(&[&1 | preload_list])
+
+        _ ->
+          preload_list
+      end
+
     components = List.flatten([with_components | preload_list])
     component_mods = Enum.map(components, &components_modules/1)
     mandatories = Enum.map(with_components, &components_modules/1)
 
     # If the return type is not part of components to find, add it
     {components, mandatories} =
-      if type != Entity and type not in component_mods do
-        {[type | components], [type | mandatories]}
-      else
-        {components, mandatories}
+      case type do
+        Entity ->
+          {components, mandatories}
+
+        value when is_tuple(value) ->
+          {components, mandatories}
+
+        _ ->
+          if type in component_mods,
+            do: {components, mandatories},
+            else: {[type | components], [type | mandatories]}
+      end
+
+    return_entity =
+      case type do
+        Entity -> true
+        value when is_tuple(value) -> Entity in Tuple.to_list(type)
+        _ -> false
       end
 
     %Query{
       return_type: type,
       components: components,
       mandatories: mandatories,
-      preload_all: preload == :all
+      preload_all: preload == :all,
+      return_entity: return_entity
     }
   end
 

@@ -48,20 +48,37 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
-  def all(query) do
-    %Query{
-      return_type: type,
-      components: components,
-      mandatories: mandatories,
-      preload_all: preload_all
-    } = query
+  def all(%Query{return_entity: true, mandatories: []} = query) do
+    %Query{return_type: return_type, components: components, preload_all: preload_all} = query
+
+    Entity
+    # If no required component, we must get all Entities
+    |> all_keys()
+    # Transform to Entity struct
+    |> Enum.map(&build_entity_struct(&1))
+    # Fetch needed components
+    |> Enum.map(&fetch_needed_components(&1, components, preload_all))
+    # Return the requested type
+    |> apply_return_type(return_type)
+  end
+
+  # return_type can be `Entity`, a Component module or a tuple here
+  def all(%Query{return_type: return_type} = query) do
+    %Query{components: components, mandatories: mandatories, preload_all: preload_all} = query
 
     components
-    |> Enum.flat_map(&query_components/1)
+    # Select needed components
+    |> select_components_by_type()
+    # Group by owner
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
+    # Keep only all required component matching
     |> Enum.filter(&has_all_components(&1, mandatories))
-    |> apply_return_type(type, mandatories)
-    |> maybe_preload_all(type, preload_all)
+    # Transform to Entity struct
+    |> Enum.map(fn {id, compons} -> {build_entity_struct(id), compons} end)
+    # Maybe preload all
+    |> maybe_preload_all(preload_all)
+    # Return the requested type
+    |> apply_return_type(return_type)
   end
 
   ### Entities
@@ -285,6 +302,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Private Helpers
 
+  defp unwrap({:ok, value}), do: value
+
   defp parent_id(nil), do: nil
   defp parent_id(%Entity{id: id}), do: id
 
@@ -372,15 +391,26 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  defp query_components(type) when is_atom(type) do
-    index_read(Component, type, :type)
-  end
-
-  defp query_components({type, specs}) do
+  defp select_components_by_type(components) do
     # TODO: Generate the select query
     match = {Component, :_, :_, :"$3", :"$4"}
-    guards = Enum.map(specs, fn {op, field, value} -> {op, {:map_get, field, :"$4"}, value} end)
-    guards = [{:==, :"$3", type} | guards]
+
+    guards =
+      components
+      |> Enum.reverse()
+      |> Enum.map(fn
+        {component_mod, specs} ->
+          specs
+          |> Enum.map(fn {op, field, value} -> {op, {:map_get, field, :"$4"}, value} end)
+          |> Enum.reduce(&{:andalso, &1, &2})
+          |> then(&{:andalso, {:==, :"$3", component_mod}, &1})
+
+        component_mod ->
+          {:==, :"$3", component_mod}
+      end)
+      |> Enum.reduce(&{:orelse, &1, &2})
+      |> List.wrap()
+
     result = [:"$_"]
     query = [{match, guards, result}]
 
@@ -392,33 +422,41 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     mandatories -- component_modules == []
   end
 
-  defp apply_return_type(tuples, Entity, []) do
-    mapping = Map.new(tuples)
-
-    Entity
-    # If no required component, we must get all Entities
-    |> all_keys()
-    # Then just add components if found
-    |> Enum.map(&{build_entity_struct(&1), Map.get(mapping, &1, [])})
+  defp maybe_preload_all(entities, true) do
+    Enum.map(entities, &{elem(&1, 0), &1 |> elem(0) |> list_components() |> unwrap()})
   end
 
-  defp apply_return_type(tuples, Entity, _) do
-    Enum.map(tuples, fn {id, components} -> {build_entity_struct(id), components} end)
+  defp maybe_preload_all(entities, _preload_all), do: entities
+
+  defp fetch_needed_components(entity, _components, true) do
+    {entity, entity |> list_components() |> unwrap()}
   end
 
-  defp apply_return_type(tuples, component_mod, _) do
+  defp fetch_needed_components(entity, components, _preload_all) do
+    entity_components = Enum.flat_map(components, &(entity |> fetch_components(&1) |> unwrap()))
+    {entity, entity_components}
+  end
+
+  defp apply_return_type(tuples, Entity) do
     tuples
-    |> Enum.flat_map(&elem(&1, 1))
-    |> Enum.filter(&(&1.__struct__ == component_mod))
   end
 
-  defp maybe_preload_all(entities, Entity, true) do
-    entities
-    |> Enum.map(fn {entity, _} ->
-      {:ok, components} = list_components(entity)
-      {entity, components}
+  defp apply_return_type(tuples, return) when is_tuple(return) do
+    return_list = Tuple.to_list(return)
+
+    Enum.map(tuples, fn {entity, components} ->
+      return_list
+      |> Enum.map(fn
+        Entity -> entity
+        component_mod -> Enum.find(components, &(&1.__struct__ == component_mod))
+      end)
+      |> List.to_tuple()
     end)
   end
 
-  defp maybe_preload_all(entities, _type, _preload_all), do: entities
+  defp apply_return_type(tuples, component_mod) do
+    Enum.flat_map(tuples, fn {_entity, components} ->
+      Enum.filter(components, &(&1.__struct__ == component_mod))
+    end)
+  end
 end
