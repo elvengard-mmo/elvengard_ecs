@@ -23,7 +23,8 @@ defmodule ElvenGard.ECS.Query do
 
   ## General
 
-  @spec select(Entity | module(), Keyword.t()) :: t()
+  # FIXME: Clean this functions
+  @spec select(Entity | module() | tuple(), Keyword.t()) :: t()
   def select(type, query \\ []) do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])

@@ -48,6 +48,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
+  @spec all(Query.t()) :: list()
   def all(%Query{return_entity: true, mandatories: []} = query) do
     %Query{return_type: return_type, components: components, preload_all: preload_all} = query
 
