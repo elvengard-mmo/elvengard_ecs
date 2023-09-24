@@ -82,12 +82,12 @@ defmodule ElvenGard.ECS.Query do
     }
   end
 
-  @spec all(Query.t()) :: [{Entity.t(), [Component.t()]} | Component.t()]
+  @spec all(Query.t()) :: [{Entity.t(), [Component.t()]} | Component.t() | tuple()]
   def all(%Query{} = query) do
     Config.backend().all(query)
   end
 
-  @spec one(Query.t()) :: nil | {Entity.t(), [Component.t()]} | Component.t()
+  @spec one(Query.t()) :: nil | {Entity.t(), [Component.t()]} | Component.t() | tuple()
   def one(%Query{} = query) do
     case Config.backend().all(query) do
       [] -> nil
