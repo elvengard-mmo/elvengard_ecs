@@ -94,15 +94,20 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @doc false
   def expand_with_events(system, events) do
-    case system.__event_subscriptions__() do
-      nil ->
-        [system]
+    maybe_system = if system.__run_each_frames__(), do: [system], else: []
 
-      subs ->
-        events
-        |> Enum.filter(&(&1.__struct__ in subs))
-        |> Enum.map(&{system, &1})
-    end
+    maybe_events =
+      case system.__event_subscriptions__() do
+        [] ->
+          []
+
+        subs ->
+          events
+          |> Enum.filter(&(&1.__struct__ in subs))
+          |> Enum.map(&{system, &1})
+      end
+
+    Enum.concat(maybe_system, maybe_events)
   end
 
   ## Private functions
