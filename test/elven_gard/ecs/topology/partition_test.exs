@@ -48,8 +48,8 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     use ElvenGard.ECS.System, lock_components: []
 
     @impl true
-    def run(delta) do
-      IO.puts("[WithoutEventsSystem] delta: #{delta}")
+    def run(%{partition: partition, delta: delta}) do
+      IO.puts("[WithoutEventsSystem] partition: #{partition} - delta: #{delta}")
     end
   end
 
@@ -59,8 +59,10 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       event_subscriptions: [Test1Event, Test2Event]
 
     @impl true
-    def run(event, delta) do
-      IO.puts("[WithEventsSystem] delta: #{delta} - event: #{inspect(event)}")
+    def run(event, %{partition: partition, delta: delta}) do
+      IO.puts(
+        "[WithEventsSystem] partition: #{partition} - delta: #{delta} - event: #{inspect(event)}"
+      )
     end
   end
 
@@ -108,7 +110,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
   #     {%Test2Event{id: 4}, :default}
   #   ]
 
-  #   EventSource.dispatch(source, events)
+  #   ElvenGard.ECS.Topology.EventSource.dispatch(source, events)
 
   #   Process.sleep(2000)
   # end

@@ -70,10 +70,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   @impl true
-  def handle_continue(:run_startup_systems, %{startup_systems: startup_systems} = state) do
+  def handle_continue(:run_startup_systems, state) do
+    %{id: id, startup_systems: startup_systems} = state
+
     # Run all startup_systems
     Enum.each(startup_systems, fn module ->
-      _ = module.run(:startup)
+      context = build_context(id, :startup)
+      _ = module.run(context)
     end)
 
     {:noreply, state, {:continue, :subscribe_to_events}}
@@ -126,6 +129,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   defp now(), do: System.monotonic_time(:millisecond)
 
+  defp build_context(partition, delta), do: %{partition: partition, delta: delta}
+
   defp schedule_next_tick(state) do
     %{prev_tick: prev_tick, interval: interval} = state
     time = now()
@@ -148,14 +153,19 @@ defmodule ElvenGard.ECS.Topology.Partition do
   defp batch_and_execute([], _state), do: :ok
 
   defp batch_and_execute(systems, state) do
-    %{concurrency: concurrency, system_timeout: system_timeout, prev_tick: prev_tick} = state
+    %{
+      id: id,
+      concurrency: concurrency,
+      system_timeout: system_timeout,
+      prev_tick: prev_tick
+    } = state
 
     {batch, remaining} = batch_systems(systems, concurrency)
 
     succeed =
       batch
       |> Task.async_stream(
-        &execute(&1, prev_tick),
+        &execute(&1, prev_tick, id),
         max_concurrency: concurrency,
         ordered: false,
         timeout: system_timeout,
@@ -177,9 +187,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   # System subscribing to events
-  defp execute({system, event} = value, prev_tick) do
-    delta = now() - prev_tick
-    system.run(event, delta)
+  defp execute({system, event} = value, prev_tick, partition) do
+    context = build_context(partition, now() - prev_tick)
+    system.run(event, context)
     value
   catch
     kind, payload ->
@@ -189,9 +199,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   # Permanents systems
-  defp execute(system, prev_tick) do
-    delta = now() - prev_tick
-    system.run(delta)
+  defp execute(system, prev_tick, partition) do
+    context = build_context(partition, now() - prev_tick)
+    system.run(context)
     system
   catch
     kind, payload ->

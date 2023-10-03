@@ -6,9 +6,10 @@ defmodule ElvenGard.ECS.System do
   ## Behaviour
 
   @type delta :: non_neg_integer() | :startup
+  @type context :: %{partition: any(), delta: delta()}
 
-  @callback run(delta :: delta()) :: any()
-  @callback run(event :: struct(), delta :: delta()) :: any()
+  @callback run(context :: context()) :: any()
+  @callback run(event :: struct(), context :: context()) :: any()
 
   @optional_callbacks [run: 1, run: 2]
 
