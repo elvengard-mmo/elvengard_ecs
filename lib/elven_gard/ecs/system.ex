@@ -5,8 +5,10 @@ defmodule ElvenGard.ECS.System do
 
   ## Behaviour
 
-  @callback run(delta :: non_neg_integer()) :: any()
-  @callback run(event :: struct(), delta :: non_neg_integer()) :: any()
+  @type delta :: non_neg_integer() | :startup
+
+  @callback run(delta :: delta()) :: any()
+  @callback run(event :: struct(), delta :: delta()) :: any()
 
   @optional_callbacks [run: 1, run: 2]
 

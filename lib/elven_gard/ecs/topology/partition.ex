@@ -48,6 +48,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     {id, specs} = mod.setup(opts)
 
     systems = specs[:systems] || raise ArgumentError, ":systems is required"
+    startup_systems = Keyword.get(specs, :startup_systems, [])
     interval = Keyword.get(specs, :interval, 1_000)
     concurrency = Keyword.get(specs, :concurrency, System.schedulers_online())
     source = Keyword.get(specs, :event_source, EventSource.name())
@@ -57,6 +58,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       id: id,
       prev_tick: now(),
       interval: interval,
+      startup_systems: startup_systems,
       systems: systems,
       concurrency: concurrency,
       source: source,
@@ -64,11 +66,21 @@ defmodule ElvenGard.ECS.Topology.Partition do
       events: []
     }
 
-    {:ok, state, {:continue, :setup}}
+    {:ok, state, {:continue, :run_startup_systems}}
   end
 
   @impl true
-  def handle_continue(:setup, %{id: id, source: source} = state) do
+  def handle_continue(:run_startup_systems, %{startup_systems: startup_systems} = state) do
+    # Run all startup_systems
+    Enum.each(startup_systems, fn module ->
+      _ = module.run(:startup)
+    end)
+
+    {:noreply, state, {:continue, :subscribe_to_events}}
+  end
+
+  @impl true
+  def handle_continue(:subscribe_to_events, %{id: id, source: source} = state) do
     :ok = EventSource.subscribe(source, partition: id)
     {:noreply, schedule_next_tick(state)}
   end
