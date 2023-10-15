@@ -47,9 +47,13 @@ defmodule ElvenGard.ECS.Query do
           preload_list
       end
 
-    components = List.flatten([with_components | preload_list])
-    component_mods = Enum.map(components, &components_modules/1)
-    mandatories = Enum.map(with_components, &components_modules/1)
+    components =
+      [with_components | preload_list]
+      |> List.flatten()
+      |> Enum.uniq_by(&component_module/1)
+
+    component_mods = Enum.map(components, &component_module/1)
+    mandatories = Enum.map(with_components, &component_module/1)
 
     # If the return type is not part of components to find, add it
     {components, mandatories} =
@@ -177,6 +181,6 @@ defmodule ElvenGard.ECS.Query do
 
   ## Helpers
 
-  defp components_modules({module, _attrs}) when is_atom(module), do: module
-  defp components_modules(module) when is_atom(module), do: module
+  defp component_module({module, _attrs}) when is_atom(module), do: module
+  defp component_module(module) when is_atom(module), do: module
 end
