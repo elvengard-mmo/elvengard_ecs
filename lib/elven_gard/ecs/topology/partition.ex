@@ -36,9 +36,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
     end
   end
 
-  @doc false
   def start_link({_mod, _opts} = specs) do
     GenServer.start_link(__MODULE__, specs)
+  end
+
+  @spec started?(GenServer.server(), timeout()) :: boolean()
+  def started?(pid, timeout \\ 5000) do
+    GenServer.call(pid, :started?, timeout)
   end
 
   ## GenServer behaviour
@@ -63,7 +67,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
       concurrency: concurrency,
       source: source,
       system_timeout: system_timeout,
-      events: []
+      events: [],
+      started: false
     }
 
     {:ok, state, {:continue, :run_startup_systems}}
@@ -85,7 +90,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
   @impl true
   def handle_continue(:subscribe_to_events, %{id: id, source: source} = state) do
     :ok = EventSource.subscribe(source, partition: id)
-    {:noreply, schedule_next_tick(state)}
+    new_state = schedule_next_tick(state)
+    {:noreply, %{new_state | started: true}}
   end
 
   @impl true
@@ -103,6 +109,11 @@ defmodule ElvenGard.ECS.Topology.Partition do
   @impl true
   def handle_cast({:events, new_events}, %{events: events} = state) do
     {:noreply, %{state | events: events ++ new_events}}
+  end
+
+  @impl true
+  def handle_call(:started?, _from, %{started: started} = state) do
+    {:reply, started, state}
   end
 
   ## Internal use ONLY
