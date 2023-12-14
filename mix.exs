@@ -32,6 +32,8 @@ defmodule ElvenGard.ECS.MixProject do
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
-    []
+    [
+      {:telemetry, "~> 1.2"}
+    ]
   end
 end

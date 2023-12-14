@@ -77,12 +77,26 @@ defmodule ElvenGard.ECS.Topology.Partition do
   @impl true
   def handle_continue(:run_startup_systems, state) do
     %{id: id, startup_systems: startup_systems} = state
+    start_time = System.monotonic_time()
 
     # Run all startup_systems
     Enum.each(startup_systems, fn module ->
       context = build_context(id, :startup)
-      _ = module.run(context)
+      metadata = %{system: module, partition: id}
+
+      # Send Telemetry
+      :telemetry.span(
+        [:elvengard_ecs, :startup_system_run],
+        metadata,
+        fn -> module.run(context) end
+      )
     end)
+
+    # Send Telemetry
+    duration = System.monotonic_time() - start_time
+    measurements = %{duration: duration}
+    metadata = %{partition: id, state: state}
+    :telemetry.execute([:elvengard_ecs, :system_run], measurements, metadata)
 
     {:noreply, state, {:continue, :subscribe_to_events}}
   end
@@ -200,7 +214,15 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # System subscribing to events
   defp execute({system, event} = value, prev_tick, partition) do
     context = build_context(partition, now() - prev_tick)
-    system.run(event, context)
+    metadata = %{system: system, event: event, partition: partition}
+
+    # Send Telemetry
+    :telemetry.span(
+      [:elvengard_ecs, :system_run],
+      metadata,
+      fn -> system.run(event, context) end
+    )
+
     value
   catch
     kind, payload ->
@@ -212,7 +234,15 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # Permanents systems
   defp execute(system, prev_tick, partition) do
     context = build_context(partition, now() - prev_tick)
-    system.run(context)
+    metadata = %{system: system, partition: partition}
+
+    # Send Telemetry
+    :telemetry.span(
+      [:elvengard_ecs, :system_run],
+      metadata,
+      fn -> system.run(context) end
+    )
+
     system
   catch
     kind, payload ->
