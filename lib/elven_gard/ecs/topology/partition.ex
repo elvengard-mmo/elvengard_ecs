@@ -95,8 +95,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
     # Send Telemetry
     duration = System.monotonic_time() - start_time
     measurements = %{duration: duration}
-    metadata = %{partition: id, state: state}
-    :telemetry.execute([:elvengard_ecs, :system_run], measurements, metadata)
+    metadata = %{id: id, startup_systems: startup_systems, state: state}
+    :telemetry.execute([:elvengard_ecs, :partition_init], measurements, metadata)
 
     {:noreply, state, {:continue, :subscribe_to_events}}
   end
@@ -214,7 +214,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # System subscribing to events
   defp execute({system, event} = value, prev_tick, partition) do
     context = build_context(partition, now() - prev_tick)
-    metadata = %{system: system, event: event, partition: partition}
+    metadata = %{partition: partition, system: system, event: event}
 
     # Send Telemetry
     :telemetry.span(
@@ -234,7 +234,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # Permanents systems
   defp execute(system, prev_tick, partition) do
     context = build_context(partition, now() - prev_tick)
-    metadata = %{system: system, partition: partition}
+    metadata = %{partition: partition, system: system, event: nil}
 
     # Send Telemetry
     :telemetry.span(
