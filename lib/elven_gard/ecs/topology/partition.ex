@@ -88,7 +88,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       :telemetry.span(
         [:elvengard_ecs, :startup_system_run],
         metadata,
-        fn -> {module.run(context), _metadata = %{}} end
+        fn -> {module.run(context), metadata} end
       )
     end)
 
@@ -220,7 +220,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     :telemetry.span(
       [:elvengard_ecs, :system_run],
       metadata,
-      fn -> {system.run(event, context), _metadata = %{}} end
+      fn -> {system.run(event, context), metadata} end
     )
 
     value
@@ -240,7 +240,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     :telemetry.span(
       [:elvengard_ecs, :system_run],
       metadata,
-      fn -> {system.run(context), _metadata = %{}} end
+      fn -> {system.run(context), metadata} end
     )
 
     system
