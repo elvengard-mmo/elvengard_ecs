@@ -6,7 +6,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   Entity Table:
 
-    | entity_id | parent_id or nil |
+    | entity_id | parent_id or nil | partition or default |
 
   Component Table
 
@@ -17,6 +17,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   use Task
 
   import ElvenGard.ECS.MnesiaBackend.Records
+  import Record
 
   alias ElvenGard.ECS.Entity
   alias ElvenGard.ECS.Query
@@ -26,7 +27,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Public API
 
-  @spec start_link(Keyword.t()) :: Task.on_start()
+  @spec start_link(Keyword.t()) :: {:ok, pid()}
   def start_link(_opts) do
     Task.start_link(__MODULE__, :init_mnesia, [])
   end
@@ -50,11 +51,22 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec all(Query.t()) :: list()
   def all(%Query{return_entity: true, mandatories: []} = query) do
-    %Query{return_type: return_type, components: components, preload_all: preload_all} = query
+    %Query{
+      return_type: return_type,
+      components: components,
+      preload_all: preload_all,
+      partition: partition
+    } = query
 
-    Entity
-    # If no required component, we must get all Entities
-    |> all_keys()
+    entities =
+      case partition do
+        # If no required component, we must get all Entities
+        :any -> all_keys(Entity)
+        # If a partition is specified, get by partition
+        _ -> index_read(Entity, partition, :partition)
+      end
+
+    entities
     # Transform to Entity struct
     |> Enum.map(&build_entity_struct(&1))
     # Fetch needed components
@@ -65,7 +77,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   # return_type can be `Entity`, a Component module or a tuple here
   def all(%Query{return_type: return_type} = query) do
-    %Query{components: components, mandatories: mandatories, preload_all: preload_all} = query
+    %Query{
+      components: components,
+      mandatories: mandatories,
+      preload_all: preload_all,
+      partition: partition
+    } = query
 
     components
     # Select needed components
@@ -74,6 +91,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
     # Keep only all required component matching
     |> Enum.filter(&has_all_components(&1, mandatories))
+    # Filter by partition
+    |> maybe_filter_by_partition(partition)
     # Transform to Entity struct
     |> Enum.map(fn {id, compons} -> {build_entity_struct(id), compons} end)
     # Maybe preload all
@@ -95,7 +114,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   def select_entities(without_parent: parent) do
-    match = {Entity, :"$1", :"$2"}
+    # entity_id, parent_id, partition
+    match = {Entity, :"$1", :"$2", :"$3"}
     guards = [{:"=/=", :"$2", escape_id(parent_id(parent))}]
     return = [:"$1"]
     query = [{match, guards, return}]
@@ -115,9 +135,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
-  @spec create_entity(Entity.id(), Entity.t()) :: {:ok, Entity.t()} | {:error, :already_exists}
-  def create_entity(id, parent) do
-    entity = entity(id: id, parent_id: parent_id(parent))
+  @spec create_entity(Entity.id(), Entity.t(), Entity.partition()) ::
+          {:ok, Entity.t()} | {:error, :already_exists}
+  def create_entity(id, parent, partition) do
+    entity = entity(id: id, parent_id: parent_id(parent), partition: partition)
 
     case insert_new(entity) do
       :ok -> {:ok, build_entity_struct(id)}
@@ -137,15 +158,43 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   def parent(%Entity{id: id}) do
     case read({Entity, id}) do
       [] -> {:error, :not_found}
-      [{Entity, ^id, nil}] -> {:ok, nil}
-      [{Entity, ^id, parent_id}] -> {:ok, build_entity_struct(parent_id)}
+      [{Entity, ^id, nil, _partition}] -> {:ok, nil}
+      [{Entity, ^id, parent_id, _partition}] -> {:ok, build_entity_struct(parent_id)}
     end
   end
 
-  @spec set_parent(Entity.t(), Entity.t()) :: :ok
+  @spec set_parent(Entity.t(), Entity.t()) :: :ok | {:error, :not_found}
   def set_parent(%Entity{id: id}, parent) do
-    entity(id: id, parent_id: parent_id(parent))
-    |> insert()
+    case read({Entity, id}) do
+      [record] ->
+        record
+        |> entity(parent_id: parent_id(parent))
+        |> insert()
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  @spec partition(Entity.t()) :: {:ok, Entity.partition()} | {:error, :not_found}
+  def partition(%Entity{id: id}) do
+    case read({Entity, id}) do
+      [{Entity, ^id, _parent_id, partition}] -> {:ok, partition}
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @spec set_partition(Entity.t(), Entity.partition()) :: :ok | {:error, :not_found}
+  def set_partition(%Entity{id: id}, partition) do
+    case read({Entity, id}) do
+      [record] ->
+        record
+        |> entity(partition: partition)
+        |> insert()
+
+      [] ->
+        {:error, :not_found}
+    end
   end
 
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
@@ -286,8 +335,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       :mnesia.create_table(
         Entity,
         type: :set,
-        attributes: [:id, :parent_id],
-        index: [:parent_id]
+        attributes: [:id, :parent_id, :partition],
+        index: [:parent_id, :partition]
       )
 
     {:atomic, :ok} =
@@ -307,6 +356,9 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp parent_id(nil), do: nil
   defp parent_id(%Entity{id: id}), do: id
+
+  defp build_entity_struct(record) when is_record(record, Entity),
+    do: %Entity{id: entity(record, :id)}
 
   defp build_entity_struct(id), do: %Entity{id: id}
 
@@ -421,6 +473,24 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp has_all_components({_entity_id, components}, mandatories) do
     component_modules = Enum.map(components, & &1.__struct__)
     mandatories -- component_modules == []
+  end
+
+  defp maybe_filter_by_partition(entities, :any), do: entities
+
+  defp maybe_filter_by_partition(entities, partition) do
+    Enum.filter(entities, fn {entity_id, _components} ->
+      case read({Entity, entity_id}) do
+        [record] ->
+          record
+          # Get the partition
+          |> entity(:partition)
+          # Check if child.partition == partition
+          |> Kernel.==(partition)
+
+        [] ->
+          false
+      end
+    end)
   end
 
   defp maybe_preload_all(entities, true) do

@@ -7,14 +7,16 @@ defmodule ElvenGard.ECS.Entity do
   alias ElvenGard.ECS.UUID
   alias ElvenGard.ECS.Component
 
-  @type id :: any()
   @type t :: %Entity{id: id()}
+  @type id :: any()
+  @type partition :: :default | any()
 
   @type spec :: %{
           id: id(),
           components: [Component.spec()],
           children: [t()],
-          parent: t() | nil
+          parent: t() | nil,
+          partition: partition
         }
 
   @enforce_keys [:id]
@@ -33,7 +35,8 @@ defmodule ElvenGard.ECS.Entity do
       id: UUID.uuid4(),
       components: [],
       children: [],
-      parent: nil
+      parent: nil,
+      partition: :default
     }
 
     Map.merge(default, Map.new(opts))

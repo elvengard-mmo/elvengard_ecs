@@ -56,6 +56,18 @@ defmodule ElvenGard.ECS.CommandTest do
       assert %PlayerComponent{name: "Player"} = player_component
       assert %PositionComponent{map_id: 42, pos_x: 0, pos_y: 0} = position_component
     end
+
+    test "spawn an Entity with partition spec" do
+      partition = make_ref()
+      specs = Entity.entity_spec(partition: partition)
+
+      {:ok, {_outside_entity, []}} = Command.spawn_entity(Entity.entity_spec())
+      assert {:ok, entity} = Command.spawn_entity(specs)
+
+      assert [^entity] =
+               Query.select(Entity, partition: partition)
+               |> Query.all()
+    end
   end
 
   describe "despawn_entity/2" do
@@ -187,6 +199,24 @@ defmodule ElvenGard.ECS.CommandTest do
       assert :ok = Command.set_parent(entity, nil)
       {:ok, parent} = Query.parent(entity)
       assert is_nil(parent)
+    end
+
+    test "returns a not found error if entity doesn't exists" do
+      assert {:error, :not_found} = Command.set_parent(invalid_entity(), make_ref())
+    end
+  end
+
+  describe "set_partition/2" do
+    test "set the partition for an Entity" do
+      entity = spawn_entity()
+      partition = make_ref()
+
+      assert :ok = Command.set_partition(entity, partition)
+      assert Query.partition(entity) == {:ok, partition}
+    end
+
+    test "returns a not found error if entity doesn't exists" do
+      assert {:error, :not_found} = Command.set_partition(invalid_entity(), make_ref())
     end
   end
 

@@ -10,7 +10,7 @@ defmodule ElvenGard.ECS.Query do
 
   ## Struct
 
-  defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity]
+  defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity, :partition]
 
   @typep component_module :: module()
   @type t :: %Query{
@@ -18,7 +18,8 @@ defmodule ElvenGard.ECS.Query do
           components: [Component.spec()],
           mandatories: [component_module()],
           preload_all: boolean(),
-          return_entity: boolean()
+          return_entity: boolean(),
+          partition: :any | Entity.partition()
         }
 
   ## General
@@ -28,6 +29,7 @@ defmodule ElvenGard.ECS.Query do
   def select(type, query \\ []) do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])
+    partition = Keyword.get(query, :partition, :any)
 
     preload_list =
       case preload do
@@ -82,7 +84,8 @@ defmodule ElvenGard.ECS.Query do
       components: components,
       mandatories: mandatories,
       preload_all: preload == :all,
-      return_entity: return_entity
+      return_entity: return_entity,
+      partition: partition
     }
   end
 
@@ -113,6 +116,14 @@ defmodule ElvenGard.ECS.Query do
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
     Config.backend().fetch_entity(id)
+  end
+
+  @doc """
+  Returns the partition for the given entity.
+  """
+  @spec partition(Entity.t()) :: {:ok, Entity.partition()} | {:error, :not_found}
+  def partition(%Entity{} = entity) do
+    Config.backend().partition(entity)
   end
 
   ## Relationships

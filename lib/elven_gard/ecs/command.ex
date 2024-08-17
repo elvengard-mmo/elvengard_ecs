@@ -82,6 +82,14 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
+  @spec set_partition(Entity.t(), Entity.partition()) :: :ok | {:error, :not_found}
+  def set_partition(%Entity{} = entity, partition) do
+    Config.backend().set_partition(entity, partition)
+  end
+
+  @doc """
+  TODO: Documentation
+  """
   @spec add_component(Entity.t(), Component.spec() | Component.t()) :: Component.t()
   def add_component(%Entity{} = entity, component_or_spec) do
     Config.backend().add_component(entity, component_or_spec)
@@ -120,8 +128,8 @@ defmodule ElvenGard.ECS.Command do
 
   defp unwrap({:ok, value}), do: value
 
-  defp create_entity(%{id: id, parent: parent}) do
-    Config.backend().create_entity(id, parent)
+  defp create_entity(%{id: id, parent: parent, partition: partition}) do
+    Config.backend().create_entity(id, parent, partition)
   end
 
   defp set_children(entity, children) do

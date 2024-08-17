@@ -14,6 +14,15 @@ defmodule ElvenGard.ECS.QueryTest do
       assert {entity, []} in Query.all(query)
     end
 
+    test "Entities list all in partition" do
+      _outside_entity = spawn_entity()
+      partition = make_ref()
+      entity = spawn_entity(partition: partition)
+
+      query = Query.select(Entity, partition: partition)
+      assert Query.all(query) == [{entity, []}]
+    end
+
     test "Entities list all + preload" do
       entity = spawn_entity(components: [PlayerComponent])
 
@@ -143,6 +152,18 @@ defmodule ElvenGard.ECS.QueryTest do
 
       query = Query.select(PositionComponent)
       assert %PositionComponent{map_id: ref} in Query.all(query)
+    end
+
+    test "Components list all in partition" do
+      map_ref = make_ref()
+      partition = make_ref()
+      components = [{PositionComponent, map_id: map_ref}]
+
+      _outside_entity = spawn_entity(components: [{PositionComponent, map_id: 123}])
+      _entity = spawn_entity(components: components, partition: partition)
+
+      query = Query.select(PositionComponent, partition: partition)
+      assert Query.all(query) == [%PositionComponent{map_id: map_ref}]
     end
 
     test "Components + with" do
@@ -316,6 +337,21 @@ defmodule ElvenGard.ECS.QueryTest do
 
     assert {:ok, ^entity} = Query.fetch_entity(entity.id)
     assert {:error, :not_found} = Query.fetch_entity("<unknown>")
+  end
+
+  describe "partition/1" do
+    test "returns the partition using 'partition' entity spec" do
+      player1 = spawn_entity()
+      assert {:ok, :default} = Query.partition(player1)
+
+      partition = make_ref()
+      player2 = spawn_entity(partition: partition)
+      assert {:ok, ^partition} = Query.partition(player2)
+    end
+
+    test "returns a not found error if entity doesn't exists" do
+      assert {:error, :not_found} = Query.partition(invalid_entity())
+    end
   end
 
   ## Tests - Relationships
