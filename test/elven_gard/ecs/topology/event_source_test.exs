@@ -3,24 +3,39 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
 
   alias ElvenGard.ECS.Topology.EventSource
 
+  defmodule OddEvenEvent do
+    use ElvenGard.ECS.Event, fields: [:value]
+
+    def new(value) do
+      %OddEvenEvent{
+        value: value,
+        partition: if(rem(value, 2) == 0, do: :even, else: :odd)
+      }
+    end
+
+    def value(%OddEvenEvent{value: value}) do
+      value
+    end
+  end
+
   ## Setup
 
   setup do
     name = :"Elixir.EventSource#{Enum.random(1..1_000_000)}"
-    %{source: start_supervised!({EventSource, [name: name, hash: &odd_even_hash/1]}, id: name)}
+    %{source: start_supervised!({EventSource, [name: name]}, id: name)}
   end
 
   ## Tests
 
   test "is globally registered" do
-    start_supervised!({EventSource, hash: &odd_even_hash/1})
+    start_supervised!({EventSource, []})
 
     {:global, name} = EventSource.name()
     assert is_pid(:global.whereis_name(name))
   end
 
   test "cannot be start multiple times" do
-    start_supervised!({EventSource, hash: &odd_even_hash/1})
+    start_supervised!({EventSource, []})
 
     # EventSource is already started by the setup_all
     assert EventSource.start_link([]) == :ignore
@@ -42,31 +57,37 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
 
   test "subscribe and dispatch", %{source: source} do
     :ok = EventSource.subscribe(source, partition: :odd)
-    :ok = EventSource.dispatch(source, [1, 3, 5, 7, 9])
-    assert_receive {:"$gen_cast", {:events, [1, 3, 5, 7, 9]}}
+    events = Enum.map([1, 3, 5, 7, 9], &OddEvenEvent.new/1)
+
+    :ok = EventSource.dispatch(source, events)
+    assert_receive {:"$gen_cast", {:events, ^events}}
   end
 
   test "buffers events before subscription", %{source: source} do
-    :ok = EventSource.dispatch(source, [1, 3])
-    :ok = EventSource.dispatch(source, [7, 9])
-    :ok = EventSource.dispatch(source, [1, 3, 5, 7, 9])
+    :ok = EventSource.dispatch(source, Enum.map([1, 3], &OddEvenEvent.new/1))
+    :ok = EventSource.dispatch(source, Enum.map([7, 9], &OddEvenEvent.new/1))
+    :ok = EventSource.dispatch(source, Enum.map([1, 3, 5, 7, 9], &OddEvenEvent.new/1))
 
     :ok = EventSource.subscribe(source, partition: :odd)
-    assert_receive {:"$gen_cast", {:events, [1, 3, 7, 9, 1, 3, 5, 7, 9]}}
+    all_events = Enum.map([1, 3, 7, 9, 1, 3, 5, 7, 9], &OddEvenEvent.new/1)
+    assert_receive {:"$gen_cast", {:events, ^all_events}}
   end
 
   test "dispatch to multiple partition", %{source: source} do
-    :ok = EventSource.dispatch(source, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    all_events = Enum.map([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], &OddEvenEvent.new/1)
+    odd_events = Enum.map([1, 3, 5, 7, 9], &OddEvenEvent.new/1)
+    even_events = Enum.map([2, 4, 6, 8, 10], &OddEvenEvent.new/1)
+    :ok = EventSource.dispatch(source, all_events)
 
     # First get odd events
     :ok = EventSource.subscribe(source, partition: :odd)
-    assert_receive {:"$gen_cast", {:events, [1, 3, 5, 7, 9]}}
-    refute_receive {:"$gen_cast", {:events, [2, 4, 6, 8, 10]}}
+    assert_receive {:"$gen_cast", {:events, ^odd_events}}
+    refute_receive {:"$gen_cast", {:events, ^even_events}}
 
     # Then get even events
     :ok = EventSource.unsubscribe(source)
     :ok = EventSource.subscribe(source, partition: :even)
-    assert_receive {:"$gen_cast", {:events, [2, 4, 6, 8, 10]}}
+    assert_receive {:"$gen_cast", {:events, ^even_events}}
   end
 
   test "subscribers are monitored", %{source: source} do
@@ -94,12 +115,8 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
 
   ## Helpers
 
-  defp odd_even_hash(event) do
-    {event, if(rem(event, 2) == 0, do: :even, else: :odd)}
-  end
-
   defp partitions(source) do
-    {_hash, partitions, _subscribers, _discarded} = :sys.get_state(source)
+    {partitions, _subscribers, _discarded} = :sys.get_state(source)
     partitions
   end
 

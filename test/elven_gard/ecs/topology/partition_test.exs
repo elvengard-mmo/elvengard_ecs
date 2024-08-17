@@ -11,7 +11,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
 
     source =
       start_supervised!(
-        {ElvenGard.ECS.Topology.EventSource, [name: name, hash: &Function.identity/1]},
+        {ElvenGard.ECS.Topology.EventSource, [name: name]},
         id: name
       )
 
