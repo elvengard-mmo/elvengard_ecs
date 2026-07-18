@@ -112,9 +112,16 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def handle_info(:tick, state) do
-    %{systems: systems, events: events, prev_tick: prev_tick} = state
+    %{systems: systems, events: event_batches, prev_tick: prev_tick} = state
     tick = now()
     delta = tick - prev_tick
+
+    events =
+      case event_batches do
+        [] -> []
+        [events] -> events
+        _ -> event_batches |> :lists.reverse() |> :lists.append()
+      end
 
     systems
     |> Enum.flat_map(&expand_with_events(&1, events))
@@ -126,7 +133,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def handle_cast({:events, new_events}, %{events: events} = state) do
-    {:noreply, %{state | events: events ++ new_events}}
+    {:noreply, %{state | events: [new_events | events]}}
   end
 
   @impl true

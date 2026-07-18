@@ -88,6 +88,17 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
+  defmodule EventRecordingSystem do
+    use ElvenGard.ECS.System,
+      lock_components: [],
+      event_subscriptions: [Test1Event]
+
+    @impl true
+    def run(%Test1Event{id: id}, %{partition: test_pid}) do
+      send(test_pid, {:event_processed, id})
+    end
+  end
+
   ## Tests
 
   describe "expand_with_events/2" do
@@ -139,6 +150,29 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     send(task, :finish)
     assert_receive {:system_started, :sync, ^delta}
     assert delta >= 0
+  end
+
+  test "preserves event order across batches", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [EventRecordingSystem],
+         interval: 60_000,
+         concurrency: 1}
+      )
+
+    assert Partition.started?(partition)
+
+    GenServer.cast(partition, {:events, [%Test1Event{id: 1}, %Test1Event{id: 2}]})
+    GenServer.cast(partition, {:events, [%Test1Event{id: 3}, %Test1Event{id: 4}]})
+    send(partition, :tick)
+
+    assert_receive {:event_processed, 1}
+    assert_receive {:event_processed, 2}
+    assert_receive {:event_processed, 3}
+    assert_receive {:event_processed, 4}
   end
 
   # test "aa", %{source: source} do
