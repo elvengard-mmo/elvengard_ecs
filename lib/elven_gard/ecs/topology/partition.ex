@@ -262,7 +262,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   defp batch_systems([{system, _event} = value | remaining], counter, acc, next, components) do
-    case batch(system, components) do
+    case batch(system, components, acc == []) do
       :sync ->
         batch_systems(remaining, 0, [value | acc], next, components)
 
@@ -276,7 +276,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   defp batch_systems([system | remaining], counter, acc, next, components) do
-    case batch(system, components) do
+    case batch(system, components, acc == []) do
       :sync ->
         batch_systems(remaining, 0, [system | acc], next, components)
 
@@ -289,13 +289,12 @@ defmodule ElvenGard.ECS.Topology.Partition do
     end
   end
 
-  # FIXME: Sync -> stop loop
-  defp batch(system, components) do
-    case {system.__lock_components__(), MapSet.size(components)} do
-      {:sync, 0} ->
+  defp batch(system, components, batch_empty?) do
+    case {system.__lock_components__(), batch_empty?} do
+      {:sync, true} ->
         :sync
 
-      {:sync, _} ->
+      {:sync, false} ->
         :next
 
       {lock_components, _} ->

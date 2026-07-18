@@ -28,11 +28,11 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       args = [
         event_source: Keyword.fetch!(opts, :event_source),
         systems: Keyword.get(opts, :systems, []),
-        tick_rate: Keyword.get(opts, :tick_rate, 1),
+        interval: Keyword.get(opts, :interval, 1),
         concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
       ]
 
-      {:default, args}
+      {Keyword.get(opts, :id, :default), args}
     end
   end
 
@@ -66,6 +66,28 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
+  defmodule UnlockedBlockingSystem do
+    use ElvenGard.ECS.System, lock_components: []
+
+    @impl true
+    def run(%{partition: test_pid}) do
+      send(test_pid, {:system_started, :unlocked, self()})
+
+      receive do
+        :finish -> :ok
+      end
+    end
+  end
+
+  defmodule SyncSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    @impl true
+    def run(%{partition: test_pid}) do
+      send(test_pid, {:system_started, :sync})
+    end
+  end
+
   ## Tests
 
   describe "expand_with_events/2" do
@@ -95,6 +117,27 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       assert {WithEventsSystem, %Test2Event{id: 3}} = Enum.at(expanded, 2)
       assert {WithEventsSystem, %Test2Event{id: 4}} = Enum.at(expanded, 3)
     end
+  end
+
+  test "runs a sync system in an isolated batch", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [UnlockedBlockingSystem, SyncSystem],
+         interval: 60_000,
+         concurrency: 2}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    assert_receive {:system_started, :unlocked, task}
+    refute_receive {:system_started, :sync}, 100
+
+    send(task, :finish)
+    assert_receive {:system_started, :sync}
   end
 
   # test "aa", %{source: source} do
