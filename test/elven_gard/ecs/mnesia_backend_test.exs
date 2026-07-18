@@ -36,6 +36,62 @@ defmodule ElvenGard.ECS.MnesiaBackendTest do
     assert task_count - 1 == Enum.count(results, &(&1 == {:error, :already_exists}))
   end
 
+  test "rejects direct and indirect parent cycles" do
+    {:ok, root} = MnesiaBackend.create_entity(make_ref(), nil, :default)
+    {:ok, child} = MnesiaBackend.create_entity(make_ref(), root, :default)
+    {:ok, grandchild} = MnesiaBackend.create_entity(make_ref(), child, :default)
+
+    assert {:error, :cyclic_relationship} = MnesiaBackend.set_parent(root, root)
+    assert {:error, :cyclic_relationship} = MnesiaBackend.set_parent(root, grandchild)
+    assert {:ok, nil} = MnesiaBackend.parent(root)
+  end
+
+  test "rejects a creation that closes a parent cycle" do
+    first_id = make_ref()
+    second_id = make_ref()
+    second = %Entity{id: second_id}
+
+    assert {:ok, first} = MnesiaBackend.create_entity(first_id, second, :default)
+
+    assert {:error, :cyclic_relationship} =
+             MnesiaBackend.create_entity(second_id, first, :default)
+
+    assert {:error, :not_found} = MnesiaBackend.fetch_entity(second_id)
+  end
+
+  test "allows only one of two concurrent creations that would form a cycle" do
+    caller = self()
+    first_id = make_ref()
+    second_id = make_ref()
+
+    tasks = [
+      Task.async(fn ->
+        send(caller, {:ready, self()})
+
+        receive do
+          :create ->
+            MnesiaBackend.create_entity(first_id, %Entity{id: second_id}, :default)
+        end
+      end),
+      Task.async(fn ->
+        send(caller, {:ready, self()})
+
+        receive do
+          :create ->
+            MnesiaBackend.create_entity(second_id, %Entity{id: first_id}, :default)
+        end
+      end)
+    ]
+
+    Enum.each(tasks, fn _task -> assert_receive({:ready, _pid}) end)
+    Enum.each(tasks, fn task -> send(task.pid, :create) end)
+
+    results = Task.await_many(tasks)
+
+    assert 1 == Enum.count(results, &match?({:ok, %Entity{}}, &1))
+    assert 1 == Enum.count(results, &(&1 == {:error, :cyclic_relationship}))
+  end
+
   test "updates the parent and partition without losing concurrent changes" do
     caller = self()
     partition = make_ref()

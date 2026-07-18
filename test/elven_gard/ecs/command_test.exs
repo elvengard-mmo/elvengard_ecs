@@ -68,6 +68,20 @@ defmodule ElvenGard.ECS.CommandTest do
                Query.select(Entity, partition: partition)
                |> Query.all()
     end
+
+    test "rejects a parent cycle" do
+      first_id = make_ref()
+      second_id = make_ref()
+      second = %Entity{id: second_id}
+
+      assert {:ok, {first, []}} =
+               Command.spawn_entity(Entity.entity_spec(id: first_id, parent: second))
+
+      assert {:error, :cyclic_relationship} =
+               Command.spawn_entity(Entity.entity_spec(id: second_id, parent: first))
+
+      assert {:error, :not_found} = Query.fetch_entity(second_id)
+    end
   end
 
   describe "despawn_entity/2" do

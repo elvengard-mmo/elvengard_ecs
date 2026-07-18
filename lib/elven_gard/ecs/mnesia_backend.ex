@@ -141,14 +141,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
-  @spec create_entity(Entity.id(), Entity.t(), Entity.partition()) ::
-          {:ok, Entity.t()} | {:error, :already_exists}
+  @spec create_entity(Entity.id(), Entity.t() | nil, Entity.partition()) ::
+          {:ok, Entity.t()} | {:error, :already_exists | :cyclic_relationship}
   def create_entity(id, parent, partition) do
     entity = entity(id: id, parent_id: parent_id(parent), partition: partition)
 
     case insert_new(entity) do
       :ok -> {:ok, build_entity_struct(id)}
       {:error, :already_exists} = error -> error
+      {:error, :cyclic_relationship} = error -> error
     end
   end
 
@@ -169,7 +170,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  @spec set_parent(Entity.t(), Entity.t()) :: :ok | {:error, :not_found}
+  @spec set_parent(Entity.t(), Entity.t() | nil) ::
+          :ok | {:error, :cyclic_relationship | :not_found}
   def set_parent(%Entity{id: id}, parent) do
     update_entity(id, :parent_id, parent)
   end
@@ -447,15 +449,43 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp do_update_entity(id, field, value) do
     case :mnesia.wread({Entity, id}) do
-      [record] -> record |> update_entity_record(field, value) |> :mnesia.write()
+      [record] -> update_entity_record(record, id, field, value)
       [] -> {:error, :not_found}
     end
   end
 
-  defp update_entity_record(record, field, value) do
+  defp update_entity_record(record, id, field, value) do
     case field do
-      :parent_id -> entity(record, parent_id: parent_id(value))
-      :partition -> entity(record, partition: value)
+      :parent_id -> update_entity_parent(record, id, value)
+      :partition -> record |> entity(partition: value) |> :mnesia.write()
+    end
+  end
+
+  defp update_entity_parent(record, id, parent) do
+    parent_id = parent_id(parent)
+
+    case ensure_acyclic_parent(id, parent_id) do
+      :ok -> record |> entity(parent_id: parent_id) |> :mnesia.write()
+      {:error, :cyclic_relationship} = error -> error
+    end
+  end
+
+  defp ensure_acyclic_parent(entity_id, parent_id) do
+    case parent_id do
+      nil ->
+        :ok
+
+      ^entity_id ->
+        {:error, :cyclic_relationship}
+
+      _other ->
+        case :mnesia.read({Entity, parent_id}) do
+          [{Entity, ^parent_id, next_parent_id, _partition}] ->
+            ensure_acyclic_parent(entity_id, next_parent_id)
+
+          [] ->
+            :ok
+        end
     end
   end
 
@@ -473,13 +503,23 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case :mnesia.transaction(fn -> do_insert_new(record) end) do
       {:atomic, :ok} -> :ok
       {:aborted, :already_exists} -> {:error, :already_exists}
+      {:aborted, :cyclic_relationship} -> {:error, :cyclic_relationship}
     end
   end
 
   defp do_insert_new(record) do
-    case :mnesia.wread({elem(record, 0), elem(record, 1)}) do
-      [] -> :mnesia.write(record)
+    id = entity(record, :id)
+
+    case :mnesia.wread({Entity, id}) do
+      [] -> insert_new_entity(record, id)
       _ -> :mnesia.abort(:already_exists)
+    end
+  end
+
+  defp insert_new_entity(record, id) do
+    case ensure_acyclic_parent(id, entity(record, :parent_id)) do
+      :ok -> :mnesia.write(record)
+      {:error, :cyclic_relationship} -> :mnesia.abort(:cyclic_relationship)
     end
   end
 

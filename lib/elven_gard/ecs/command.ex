@@ -25,7 +25,7 @@ defmodule ElvenGard.ECS.Command do
   Transactional way to spawn an Entity
   """
   @spec spawn_entity(Entity.spec()) :: {:ok, {Entity.t(), [Component.t()]}} | {:error, reason}
-        when reason: :already_exists | :cant_set_children
+        when reason: :already_exists | :cant_set_children | :cyclic_relationship
   def spawn_entity(specs) when is_map(specs) do
     %{
       components: components_specs,
@@ -74,7 +74,8 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
-  @spec set_parent(Entity.t(), Entity.t() | nil) :: :ok | {:error, :not_found}
+  @spec set_parent(Entity.t(), Entity.t() | nil) ::
+          :ok | {:error, :cyclic_relationship | :not_found}
   def set_parent(%Entity{} = entity, parent) do
     Config.backend().set_parent(entity, parent)
   end
