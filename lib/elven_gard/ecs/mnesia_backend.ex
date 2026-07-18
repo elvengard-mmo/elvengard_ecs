@@ -14,8 +14,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   """
 
-  use Task
-
   import ElvenGard.ECS.MnesiaBackend.Records
   import Record
 
@@ -25,9 +23,19 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Public API
 
-  @spec start_link(Keyword.t()) :: {:ok, pid()}
+  @spec child_spec(Keyword.t()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :temporary
+    }
+  end
+
+  @spec start_link(Keyword.t()) :: :ignore
   def start_link(_opts) do
-    Task.start_link(__MODULE__, :init_mnesia, [])
+    :ok = init_mnesia()
+    :ignore
   end
 
   ## Transactions
@@ -328,17 +336,16 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc false
   @spec init_mnesia() :: :ok
   def init_mnesia() do
-    # Create tables
-    {:atomic, :ok} =
-      :mnesia.create_table(
+    :ok =
+      create_table(
         Entity,
         type: :set,
         attributes: [:id, :parent_id, :partition],
         index: [:parent_id, :partition]
       )
 
-    {:atomic, :ok} =
-      :mnesia.create_table(
+    :ok =
+      create_table(
         Component,
         type: :bag,
         attributes: [:composite_key, :owner_id, :type, :component],
@@ -349,6 +356,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   ## Private Helpers
+
+  defp create_table(table, options) do
+    case :mnesia.create_table(table, options) do
+      {:atomic, :ok} -> :ok
+      {:aborted, {:already_exists, ^table}} -> :ok
+    end
+  end
 
   defp unwrap({:ok, value}), do: value
 
