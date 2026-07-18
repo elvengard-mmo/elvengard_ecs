@@ -210,11 +210,11 @@ defmodule ElvenGard.ECS.Topology.Partition do
       |> Enum.to_list()
       |> Enum.map(&elem(&1, 1))
 
-    failed = Enum.reject(batch, &(&1 in succeed))
+    failed = batch -- succeed
 
     if failed != [] do
       Logger.error(fn ->
-        "#{length(failed)} systems killed/crashed: #{inspect(batch, limit: :infinity)}"
+        "#{length(failed)} systems killed/crashed: #{inspect(failed, limit: :infinity)}"
       end)
     end
 

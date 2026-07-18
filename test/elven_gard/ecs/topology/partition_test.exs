@@ -1,7 +1,8 @@
 defmodule ElvenGard.ECS.Topology.PartitionTest do
   use ExUnit.Case, async: true
 
-  # alias ElvenGard.ECS.Topology.EventSource
+  import ExUnit.CaptureLog
+
   alias ElvenGard.ECS.Topology.Partition
 
   ## Setup
@@ -99,6 +100,20 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
+  defmodule FailOnceEventSystem do
+    use ElvenGard.ECS.System,
+      lock_components: [],
+      event_subscriptions: [Test1Event]
+
+    @impl true
+    def run(%Test1Event{id: counter}, _context) do
+      case :atomics.add_get(counter, 1, 1) do
+        1 -> :ok
+        2 -> raise "system failed"
+      end
+    end
+  end
+
   ## Tests
 
   describe "expand_with_events/2" do
@@ -173,6 +188,32 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert_receive {:event_processed, 2}
     assert_receive {:event_processed, 3}
     assert_receive {:event_processed, 4}
+  end
+
+  test "reports a failed duplicate system execution", %{source: source} do
+    counter = :atomics.new(1, [])
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [FailOnceEventSystem],
+         interval: 60_000,
+         concurrency: 2}
+      )
+
+    assert Partition.started?(partition)
+    event = %Test1Event{id: counter}
+
+    log =
+      capture_log(fn ->
+        GenServer.cast(partition, {:events, [event, event]})
+        send(partition, :tick)
+        assert Partition.started?(partition)
+      end)
+
+    assert log =~ "1 systems killed/crashed"
   end
 
   # test "aa", %{source: source} do
