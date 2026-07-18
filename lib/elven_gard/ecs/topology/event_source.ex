@@ -7,6 +7,8 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   require Logger
 
+  @buffer_limit 10_000
+
   ## Public API
 
   @spec start_link(any()) :: GenServer.on_start()
@@ -37,7 +39,7 @@ defmodule ElvenGard.ECS.Topology.EventSource do
   def init(_opts) do
     # partitions = %{partition => pid}
     # subscribers = %{pid => {partition, ref}}
-    # discarded = %{partition => [events]}
+    # discarded = %{partition => {queue, event_count}}
     # {partitions, subscribers, discarded}
     {:ok, {%{}, %{}, %{}}}
   end
@@ -49,9 +51,11 @@ defmodule ElvenGard.ECS.Topology.EventSource do
         ref = Process.monitor(pid)
         subs = Map.put(subs, pid, {partition, ref})
         partitions = Map.put(partitions, partition, pid)
-        {pending, discarded} = Map.pop(discarded, partition, [])
 
-        :ok = maybe_send(pid, pending)
+        {{pending, _event_count}, discarded} =
+          Map.pop(discarded, partition, {:queue.new(), 0})
+
+        :ok = maybe_send(pid, :queue.to_list(pending))
         {:reply, :ok, {partitions, subs, discarded}}
 
       true ->
@@ -133,8 +137,45 @@ defmodule ElvenGard.ECS.Topology.EventSource do
         dispatch_events(rest, partitions, discarded)
 
       _ ->
-        discarded = Map.update(discarded, partition, events, &(&1 ++ events))
+        buffer = Map.get(discarded, partition, {:queue.new(), 0})
+        discarded = Map.put(discarded, partition, buffer_events(partition, buffer, events))
         dispatch_events(rest, partitions, discarded)
     end
+  end
+
+  defp buffer_events(partition, {queue, event_count}, events) do
+    new_event_count = length(events)
+    total_event_count = event_count + new_event_count
+    dropped_event_count = max(total_event_count - @buffer_limit, 0)
+
+    queue =
+      case new_event_count >= @buffer_limit do
+        true ->
+          events
+          |> Enum.take(-@buffer_limit)
+          |> :queue.from_list()
+
+        false ->
+          queue
+          |> drop_oldest(dropped_event_count)
+          |> :queue.join(:queue.from_list(events))
+      end
+
+    case dropped_event_count do
+      0 ->
+        :ok
+
+      count ->
+        Logger.warning("dropped #{count} buffered events for partition #{inspect(partition)}")
+    end
+
+    {queue, min(total_event_count, @buffer_limit)}
+  end
+
+  defp drop_oldest(queue, 0), do: queue
+
+  defp drop_oldest(queue, count) do
+    {{:value, _event}, queue} = :queue.out(queue)
+    drop_oldest(queue, count - 1)
   end
 end

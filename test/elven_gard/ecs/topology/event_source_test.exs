@@ -1,6 +1,8 @@
 defmodule ElvenGard.ECS.Topology.EventSourceTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias ElvenGard.ECS.Topology.EventSource
 
   defmodule OddEvenEvent do
@@ -71,6 +73,25 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
     :ok = EventSource.subscribe(source, partition: :odd)
     all_events = Enum.map([1, 3, 7, 9, 1, 3, 5, 7, 9], &OddEvenEvent.new/1)
     assert_receive {:"$gen_cast", {:events, ^all_events}}
+  end
+
+  test "keeps the latest 10,000 buffered events and logs dropped events", %{source: source} do
+    events = Enum.map(1..10_005, &OddEvenEvent.new(&1 * 2 - 1))
+    {initial_events, overflow_events} = Enum.split(events, 9_998)
+
+    :ok = EventSource.dispatch(source, initial_events)
+
+    log =
+      capture_log(fn ->
+        :ok = EventSource.dispatch(source, overflow_events)
+        :ok = EventSource.subscribe(source, partition: :odd)
+
+        assert_receive {:"$gen_cast", {:events, buffered_events}}
+        assert length(buffered_events) == 10_000
+        assert buffered_events == Enum.drop(events, 5)
+      end)
+
+    assert log =~ "dropped 5 buffered events for partition :odd"
   end
 
   test "dispatch to multiple partition", %{source: source} do
