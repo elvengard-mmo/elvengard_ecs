@@ -134,6 +134,32 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
     refute Map.has_key?(partitions(source), :odd)
   end
 
+  test "survives a subscriber exiting immediately after unsubscribe", %{source: source} do
+    caller = self()
+
+    {:ok, subscriber} =
+      Task.start(fn ->
+        :ok = EventSource.subscribe(source, partition: :odd)
+        send(caller, :subscribed)
+
+        receive do
+          :unsubscribe -> EventSource.unsubscribe(source)
+        end
+      end)
+
+    assert_receive :subscribed
+    :ok = :sys.suspend(source)
+
+    subscriber_ref = Process.monitor(subscriber)
+    send(subscriber, :unsubscribe)
+    assert_receive {:DOWN, ^subscriber_ref, :process, ^subscriber, :normal}
+
+    :ok = :sys.resume(source)
+
+    refute Map.has_key?(partitions(source), :odd)
+    assert Process.alive?(source)
+  end
+
   ## Helpers
 
   defp partitions(source) do

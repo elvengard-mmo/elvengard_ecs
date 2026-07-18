@@ -69,7 +69,7 @@ defmodule ElvenGard.ECS.Topology.EventSource do
     case Map.pop(subs, pid) do
       {{partition, ref}, subs} ->
         partitions = Map.delete(partitions, partition)
-        true = Process.demonitor(ref)
+        true = Process.demonitor(ref, [:flush])
         {:noreply, {partitions, subs, discarded}}
 
       {nil, _subs} ->
