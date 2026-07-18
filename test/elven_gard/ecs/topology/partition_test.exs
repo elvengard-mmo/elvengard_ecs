@@ -70,8 +70,8 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     use ElvenGard.ECS.System, lock_components: []
 
     @impl true
-    def run(%{partition: test_pid}) do
-      send(test_pid, {:system_started, :unlocked, self()})
+    def run(%{partition: test_pid, delta: delta}) do
+      send(test_pid, {:system_started, :unlocked, self(), delta})
 
       receive do
         :finish -> :ok
@@ -83,8 +83,8 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     use ElvenGard.ECS.System, lock_components: :sync
 
     @impl true
-    def run(%{partition: test_pid}) do
-      send(test_pid, {:system_started, :sync})
+    def run(%{partition: test_pid, delta: delta}) do
+      send(test_pid, {:system_started, :sync, delta})
     end
   end
 
@@ -133,11 +133,12 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert Partition.started?(partition)
     send(partition, :tick)
 
-    assert_receive {:system_started, :unlocked, task}
-    refute_receive {:system_started, :sync}, 100
+    assert_receive {:system_started, :unlocked, task, delta}
+    refute_receive {:system_started, :sync, _delta}, 100
 
     send(task, :finish)
-    assert_receive {:system_started, :sync}
+    assert_receive {:system_started, :sync, ^delta}
+    assert delta >= 0
   end
 
   # test "aa", %{source: source} do

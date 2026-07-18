@@ -57,10 +57,12 @@ defmodule ElvenGard.ECS.Topology.Partition do
     concurrency = Keyword.get(specs, :concurrency, System.schedulers_online())
     source = Keyword.get(specs, :event_source, EventSource.name())
     system_timeout = Keyword.get(specs, :system_timeout, :infinity)
+    tick = now()
 
     state = %{
       id: id,
-      prev_tick: now(),
+      prev_tick: tick,
+      next_tick: tick,
       interval: interval,
       startup_systems: startup_systems,
       systems: systems,
@@ -110,13 +112,15 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def handle_info(:tick, state) do
-    %{systems: systems, events: events} = state
+    %{systems: systems, events: events, prev_tick: prev_tick} = state
+    tick = now()
+    delta = tick - prev_tick
 
     systems
     |> Enum.flat_map(&expand_with_events(&1, events))
-    |> batch_and_execute(state)
+    |> batch_and_execute(state, delta)
 
-    new_state = %{state | events: []}
+    new_state = %{state | events: [], prev_tick: tick}
     {:noreply, schedule_next_tick(new_state)}
   end
 
@@ -157,13 +161,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
   defp build_context(partition, delta), do: %{partition: partition, delta: delta}
 
   defp schedule_next_tick(state) do
-    %{prev_tick: prev_tick, interval: interval} = state
+    %{next_tick: next_tick, interval: interval} = state
     time = now()
 
     remaining_time =
       case interval do
         :infinity -> 0
-        _ -> prev_tick + interval - time
+        _ -> next_tick + interval - time
       end
 
     # Sleep until next tick
@@ -172,17 +176,16 @@ defmodule ElvenGard.ECS.Topology.Partition do
       false -> send(self(), :tick)
     end
 
-    %{state | prev_tick: time + remaining_time}
+    %{state | next_tick: time + remaining_time}
   end
 
-  defp batch_and_execute([], _state), do: :ok
+  defp batch_and_execute([], _state, _delta), do: :ok
 
-  defp batch_and_execute(systems, state) do
+  defp batch_and_execute(systems, state, delta) do
     %{
       id: id,
       concurrency: concurrency,
-      system_timeout: system_timeout,
-      prev_tick: prev_tick
+      system_timeout: system_timeout
     } = state
 
     {batch, remaining} = batch_systems(systems, concurrency)
@@ -190,7 +193,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     succeed =
       batch
       |> Task.async_stream(
-        &execute(&1, prev_tick, id),
+        &execute(&1, delta, id),
         max_concurrency: concurrency,
         ordered: false,
         timeout: system_timeout,
@@ -208,12 +211,12 @@ defmodule ElvenGard.ECS.Topology.Partition do
       end)
     end
 
-    batch_and_execute(remaining, state)
+    batch_and_execute(remaining, state, delta)
   end
 
   # System subscribing to events
-  defp execute({system, event} = value, prev_tick, partition) do
-    context = build_context(partition, now() - prev_tick)
+  defp execute({system, event} = value, delta, partition) do
+    context = build_context(partition, delta)
     metadata = %{partition: partition, system: system, event: event}
 
     # Send Telemetry
@@ -232,8 +235,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   # Permanents systems
-  defp execute(system, prev_tick, partition) do
-    context = build_context(partition, now() - prev_tick)
+  defp execute(system, delta, partition) do
+    context = build_context(partition, delta)
     metadata = %{partition: partition, system: system, event: nil}
 
     # Send Telemetry
