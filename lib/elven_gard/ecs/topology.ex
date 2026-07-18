@@ -13,29 +13,14 @@ defmodule ElvenGard.ECS.Topology do
   def wait_for_partitions(_pids, timeout) when timeout < 1, do: {:error, :timeout}
 
   def wait_for_partitions(pids, timeout) do
-    start = ElvenGard.ECS.now()
-    pid = spawn_link(__MODULE__, :do_wait_for_partitions, [self(), pids])
+    task =
+      Task.async(fn ->
+        Enum.each(pids, &Partition.started?(&1, :infinity))
+      end)
 
-    receive do
-      {:"$wait_for_partitions", []} -> :ok
-      {:"$wait_for_partitions", pids} -> wait_for_partitions(pids, ElvenGard.ECS.now() - start)
-    after
-      timeout ->
-        Process.unlink(pid)
-        Process.exit(pid, :timeout)
-        {:error, :timeout}
+    case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, :ok} -> :ok
+      nil -> {:error, :timeout}
     end
-  end
-
-  ## Internal use only
-
-  @doc false
-  def do_wait_for_partitions(from, pids) do
-    result =
-      pids
-      |> Enum.map(&if not Partition.started?(&1), do: &1)
-      |> Enum.reject(&is_nil/1)
-
-    send(from, {:"$wait_for_partitions", result})
   end
 end
