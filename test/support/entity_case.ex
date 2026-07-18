@@ -1,7 +1,9 @@
 defmodule ElvenGard.ECS.EntityCase do
+  @moduledoc false
+
   use ExUnit.CaseTemplate
 
-  alias ElvenGard.ECS.{Entity, Command}
+  alias ElvenGard.ECS.{Command, Entity}
 
   using _ do
     quote do

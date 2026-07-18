@@ -57,20 +57,8 @@ defmodule ElvenGard.ECS.Query do
     component_mods = Enum.map(components, &component_module/1)
     mandatories = Enum.map(with_components, &component_module/1)
 
-    # If the return type is not part of components to find, add it
     {components, mandatories} =
-      case type do
-        Entity ->
-          {components, mandatories}
-
-        value when is_tuple(value) ->
-          {components, mandatories}
-
-        _ ->
-          if type in component_mods,
-            do: {components, mandatories},
-            else: {[type | components], [type | mandatories]}
-      end
+      add_return_type(type, components, mandatories, component_mods)
 
     return_entity =
       case type do
@@ -191,6 +179,21 @@ defmodule ElvenGard.ECS.Query do
   end
 
   ## Helpers
+
+  defp add_return_type(type, components, mandatories, component_mods) do
+    case type do
+      Entity ->
+        {components, mandatories}
+
+      value when is_tuple(value) ->
+        {components, mandatories}
+
+      _ ->
+        if type in component_mods,
+          do: {components, mandatories},
+          else: {[type | components], [type | mandatories]}
+    end
+  end
 
   defp component_module({module, _attrs}) when is_atom(module), do: module
   defp component_module(module) when is_atom(module), do: module

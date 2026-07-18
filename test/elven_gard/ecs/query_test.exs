@@ -1,8 +1,8 @@
 defmodule ElvenGard.ECS.QueryTest do
   use ElvenGard.ECS.EntityCase, async: true
 
-  alias ElvenGard.ECS.{Entity, Query}
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
+  alias ElvenGard.ECS.{Entity, Query}
 
   ## General
 

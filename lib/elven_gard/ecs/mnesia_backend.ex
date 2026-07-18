@@ -19,9 +19,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   import ElvenGard.ECS.MnesiaBackend.Records
   import Record
 
-  alias ElvenGard.ECS.Entity
-  alias ElvenGard.ECS.Query
-  alias ElvenGard.ECS.{Component, Entity}
+  alias ElvenGard.ECS.{Component, Entity, Query}
 
   @timeout 5000
 

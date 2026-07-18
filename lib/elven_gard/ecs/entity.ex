@@ -4,8 +4,8 @@ defmodule ElvenGard.ECS.Entity do
   """
 
   alias __MODULE__
-  alias ElvenGard.ECS.UUID
   alias ElvenGard.ECS.Component
+  alias ElvenGard.ECS.UUID
 
   @type t :: %Entity{id: id()}
   @type id :: any()
