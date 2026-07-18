@@ -171,11 +171,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     %{next_tick: next_tick, interval: interval} = state
     time = now()
 
-    remaining_time =
-      case interval do
-        :infinity -> 0
-        _ -> next_tick + interval - time
-      end
+    remaining_time = next_tick + interval - time
 
     # Sleep until next tick
     case remaining_time > 0 do
@@ -280,7 +276,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
         batch_systems(remaining, counter, acc, [value | next], components)
 
       {:ok, new_components} ->
-        components = MapSet.union(components, MapSet.new(new_components))
+        components = Enum.reduce(new_components, components, &MapSet.put(&2, &1))
         batch_systems(remaining, counter - 1, [value | acc], next, components)
     end
   end
@@ -294,7 +290,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
         batch_systems(remaining, counter, acc, [system | next], components)
 
       {:ok, new_components} ->
-        components = MapSet.union(components, MapSet.new(new_components))
+        components = Enum.reduce(new_components, components, &MapSet.put(&2, &1))
         batch_systems(remaining, counter - 1, [system | acc], next, components)
     end
   end
@@ -308,8 +304,10 @@ defmodule ElvenGard.ECS.Topology.Partition do
         :next
 
       {lock_components, _} ->
-        not_member = Enum.map(lock_components, &(not MapSet.member?(components, &1)))
-        if Enum.all?(not_member), do: {:ok, lock_components}, else: :next
+        case Enum.all?(lock_components, &(not MapSet.member?(components, &1))) do
+          true -> {:ok, lock_components}
+          false -> :next
+        end
     end
   end
 end
