@@ -34,7 +34,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Transactions
 
-  @spec transaction((() -> result)) :: {:error, result} | {:ok, any()} when result: any()
+  @spec transaction((-> result)) :: {:error, result} | {:ok, any()} when result: any()
   def transaction(query) do
     case :mnesia.transaction(query) do
       {:atomic, result} -> {:ok, result}

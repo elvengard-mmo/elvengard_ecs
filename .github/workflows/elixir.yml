@@ -1,0 +1,73 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minimum:
+    name: Minimum / OTP 24.3.4.17 / Elixir 1.15.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up minimum Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "24.3.4.17"
+          elixir-version: "1.15.0"
+          version-type: strict
+
+      - name: Fetch dependencies
+        run: mix deps.get --check-locked
+
+      - name: Check lockfile
+        run: mix deps.unlock --check-unused
+
+      - name: Compile project
+        run: mix compile --force --warnings-as-errors
+
+      - name: Run tests
+        run: mix test --warnings-as-errors
+
+  current:
+    name: Current / OTP 29.0.3 / Elixir 1.20.2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+
+      - name: Fetch dependencies
+        run: mix deps.get --check-locked
+
+      - name: Check lockfile
+        run: mix deps.unlock --check-unused
+
+      - name: Run precommit checks
+        run: mix precommit

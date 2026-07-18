@@ -9,7 +9,7 @@ defmodule ElvenGard.ECS.Command do
 
   ## Transactions
 
-  @spec transaction((() -> result)) :: {:error, result} | {:ok, any()} when result: any()
+  @spec transaction((-> result)) :: {:error, result} | {:ok, any()} when result: any()
   def transaction(query) do
     Config.backend().transaction(query)
   end
