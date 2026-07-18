@@ -9,7 +9,7 @@ defmodule ElvenGard.ECS.Command do
 
   ## Transactions
 
-  @spec transaction((-> result)) :: {:error, result} | {:ok, any()} when result: any()
+  @spec transaction((-> result)) :: {:error, any()} | {:ok, result} when result: any()
   def transaction(query) do
     Config.backend().transaction(query)
   end
@@ -45,7 +45,7 @@ defmodule ElvenGard.ECS.Command do
   end
 
   @spec despawn_entity(Entity.t(), (Entity.t(), [Component.t()] -> :delete | :ignore)) ::
-          {:ok, {Entity.t(), [Component.t()]}} | {:error, any}
+          {:ok, {Entity.t(), [Component.t()]}} | {:error, any()}
   @doc """
   Transactional way to despawn an Entity
   """
@@ -74,7 +74,7 @@ defmodule ElvenGard.ECS.Command do
   @doc """
   TODO: Documentation
   """
-  @spec add_component(Entity.t(), Component.spec() | Component.t()) :: Component.t()
+  @spec add_component(Entity.t(), Component.spec() | Component.t()) :: {:ok, Component.t()}
   def add_component(%Entity{} = entity, component_or_spec) do
     Config.backend().add_component(entity, component_or_spec)
   end

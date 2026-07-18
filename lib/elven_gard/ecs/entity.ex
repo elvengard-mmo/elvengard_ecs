@@ -13,7 +13,7 @@ defmodule ElvenGard.ECS.Entity do
 
   @type spec :: %{
           id: id(),
-          components: [Component.spec()],
+          components: [Component.spec() | Component.t()],
           children: [t()],
           parent: t() | nil,
           partition: partition

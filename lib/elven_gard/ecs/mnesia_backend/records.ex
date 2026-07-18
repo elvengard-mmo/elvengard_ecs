@@ -10,8 +10,8 @@ defmodule ElvenGard.ECS.MnesiaBackend.Records do
 
   @type entity ::
           record(:entity,
-            id: Entity.t(),
-            parent_id: Entity.id(),
+            id: Entity.id(),
+            parent_id: Entity.id() | nil,
             partition: Entity.partition()
           )
 

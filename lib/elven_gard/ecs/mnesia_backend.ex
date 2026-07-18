@@ -40,7 +40,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Transactions
 
-  @spec transaction((-> result)) :: {:error, result} | {:ok, any()} when result: any()
+  @spec transaction((-> result)) :: {:error, any()} | {:ok, result} when result: any()
   def transaction(query) do
     case :mnesia.transaction(query) do
       {:atomic, result} -> {:ok, result}
@@ -55,7 +55,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
-  @spec all(Query.t()) :: list()
+  @spec all(Query.t()) :: [Query.result()]
   def all(%Query{return_entity: true, mandatories: []} = query) do
     %Query{
       return_type: return_type,

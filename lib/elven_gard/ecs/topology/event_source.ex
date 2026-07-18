@@ -7,11 +7,13 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   require Logger
 
+  alias ElvenGard.ECS.Event
+
   @buffer_limit 10_000
 
   ## Public API
 
-  @spec start_link(any()) :: GenServer.on_start()
+  @spec start_link(Keyword.t()) :: GenServer.on_start()
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name, name())
     do_start_link(name, opts)
@@ -28,7 +30,7 @@ defmodule ElvenGard.ECS.Topology.EventSource do
     GenServer.cast(name, {:unsubscribe, self()})
   end
 
-  @spec dispatch(GenServer.server(), [any()]) :: :ok
+  @spec dispatch(GenServer.server(), [Event.t()]) :: :ok
   def dispatch(name \\ name(), events) do
     GenServer.cast(name, {:dispatch, events})
   end
@@ -98,7 +100,7 @@ defmodule ElvenGard.ECS.Topology.EventSource do
   ## Internal API
 
   @doc false
-  @spec name :: {:global, module()}
+  @spec name() :: {:global, module()}
   def name(), do: {:global, __MODULE__}
 
   ## Private functions

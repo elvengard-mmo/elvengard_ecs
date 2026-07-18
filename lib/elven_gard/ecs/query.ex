@@ -13,9 +13,13 @@ defmodule ElvenGard.ECS.Query do
   defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity, :partition]
 
   @typep component_module :: module()
+  @type component_filter :: {atom(), atom(), term()}
+  @type query_component :: component_module() | {component_module(), [component_filter()]}
+  @type return_type :: Entity | component_module() | tuple()
+  @type result :: {Entity.t(), [Component.t()]} | Component.t() | tuple()
   @type t :: %Query{
-          return_type: Entity | component_module(),
-          components: [Component.spec()],
+          return_type: return_type(),
+          components: [query_component()],
           mandatories: [component_module()],
           preload_all: boolean(),
           return_entity: boolean(),
@@ -25,7 +29,7 @@ defmodule ElvenGard.ECS.Query do
   ## General
 
   # FIXME: Clean this functions
-  @spec select(Entity | module() | tuple(), Keyword.t()) :: t()
+  @spec select(return_type(), Keyword.t()) :: t()
   def select(type, query \\ []) do
     with_components = Keyword.get(query, :with, [])
     preload = Keyword.get(query, :preload, [])
@@ -77,12 +81,12 @@ defmodule ElvenGard.ECS.Query do
     }
   end
 
-  @spec all(Query.t()) :: [{Entity.t(), [Component.t()]} | Component.t() | tuple()]
+  @spec all(Query.t()) :: [result()]
   def all(%Query{} = query) do
     Config.backend().all(query)
   end
 
-  @spec one(Query.t()) :: nil | {Entity.t(), [Component.t()]} | Component.t() | tuple()
+  @spec one(Query.t()) :: result() | nil
   def one(%Query{} = query) do
     case Config.backend().all(query) do
       [] -> nil
