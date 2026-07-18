@@ -427,9 +427,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp replace_component_in_transaction(record) do
-    case :mnesia.transaction(fn -> do_replace_component(record) end) do
-      {:atomic, :ok} -> :ok
-    end
+    {:atomic, :ok} = :mnesia.transaction(fn -> do_replace_component(record) end)
+    :ok
   end
 
   defp do_replace_component(record) do
@@ -446,11 +445,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp update_component_in_transaction(owner_id, component_mod, selector, attrs) do
-    case :mnesia.transaction(fn ->
-           do_update_component(owner_id, component_mod, selector, attrs)
-         end) do
-      {:atomic, result} -> result
-    end
+    {:atomic, result} =
+      :mnesia.transaction(fn ->
+        do_update_component(owner_id, component_mod, selector, attrs)
+      end)
+
+    result
   end
 
   defp do_update_component(owner_id, component_mod, selector, attrs) do
@@ -491,9 +491,8 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp update_entity_in_transaction(id, field, value) do
-    case :mnesia.transaction(fn -> do_update_entity(id, field, value) end) do
-      {:atomic, result} -> result
-    end
+    {:atomic, result} = :mnesia.transaction(fn -> do_update_entity(id, field, value) end)
+    result
   end
 
   defp do_update_entity(id, field, value) do
