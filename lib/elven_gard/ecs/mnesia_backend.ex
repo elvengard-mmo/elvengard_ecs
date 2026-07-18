@@ -171,15 +171,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec set_parent(Entity.t(), Entity.t()) :: :ok | {:error, :not_found}
   def set_parent(%Entity{id: id}, parent) do
-    case read({Entity, id}) do
-      [record] ->
-        record
-        |> entity(parent_id: parent_id(parent))
-        |> insert()
-
-      [] ->
-        {:error, :not_found}
-    end
+    update_entity(id, :parent_id, parent)
   end
 
   @spec partition(Entity.t()) :: {:ok, Entity.partition()} | {:error, :not_found}
@@ -192,15 +184,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec set_partition(Entity.t(), Entity.partition()) :: :ok | {:error, :not_found}
   def set_partition(%Entity{id: id}, partition) do
-    case read({Entity, id}) do
-      [record] ->
-        record
-        |> entity(partition: partition)
-        |> insert()
-
-      [] ->
-        {:error, :not_found}
-    end
+    update_entity(id, :partition, partition)
   end
 
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
@@ -430,6 +414,33 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case :mnesia.is_transaction() do
       true -> :mnesia.write(record)
       false -> :mnesia.dirty_write(record)
+    end
+  end
+
+  defp update_entity(id, field, value) do
+    case :mnesia.is_transaction() do
+      true -> do_update_entity(id, field, value)
+      false -> update_entity_in_transaction(id, field, value)
+    end
+  end
+
+  defp update_entity_in_transaction(id, field, value) do
+    case :mnesia.transaction(fn -> do_update_entity(id, field, value) end) do
+      {:atomic, result} -> result
+    end
+  end
+
+  defp do_update_entity(id, field, value) do
+    case :mnesia.wread({Entity, id}) do
+      [record] -> record |> update_entity_record(field, value) |> :mnesia.write()
+      [] -> {:error, :not_found}
+    end
+  end
+
+  defp update_entity_record(record, field, value) do
+    case field do
+      :parent_id -> entity(record, parent_id: parent_id(value))
+      :partition -> entity(record, partition: value)
     end
   end
 
