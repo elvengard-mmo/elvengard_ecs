@@ -173,6 +173,23 @@ defmodule ElvenGard.ECS.CommandTest do
       assert_received {:despawn, ^entity3, []}
     end
 
+    test "rolls back the cascade when a child callback crashes" do
+      parent = spawn_entity()
+      child = spawn_entity(parent: parent)
+      grandchild = spawn_entity(parent: child)
+
+      on_child_delete = fn entity, _components ->
+        if entity == grandchild, do: raise("boom"), else: :delete
+      end
+
+      assert {:error, {%RuntimeError{message: "boom"}, _stacktrace}} =
+               Command.despawn_entity(parent, on_child_delete)
+
+      assert {:ok, ^parent} = Query.fetch_entity(parent.id)
+      assert {:ok, ^child} = Query.fetch_entity(child.id)
+      assert {:ok, ^grandchild} = Query.fetch_entity(grandchild.id)
+    end
+
     test "with children on ignore callback" do
       # Spawn dummy Entities
       ref = make_ref()

@@ -50,24 +50,7 @@ defmodule ElvenGard.ECS.Command do
   Transactional way to despawn an Entity
   """
   def despawn_entity(%Entity{} = entity, on_child_delete \\ fn _, _ -> :delete end) do
-    fn ->
-      # Delete or update each children
-      entity
-      |> Query.children()
-      |> then(&unwrap/1)
-      |> Enum.map(&{&1, unwrap(Query.list_components(&1))})
-      |> Enum.map(fn {entity, components} = tuple ->
-        {tuple, on_child_delete.(entity, components)}
-      end)
-      |> Enum.each(&maybe_despawn_child(&1, on_child_delete))
-
-      # Delete the parent
-      {:ok, components} = Config.backend().delete_components_for(entity)
-      :ok = Config.backend().delete_entity(entity)
-
-      # Returns the parent entity and its components
-      {entity, components}
-    end
+    fn -> do_despawn_entity(entity, on_child_delete) end
     |> transaction()
   end
 
@@ -144,10 +127,26 @@ defmodule ElvenGard.ECS.Command do
     |> Enum.map(fn {:ok, component} -> component end)
   end
 
+  defp do_despawn_entity(entity, on_child_delete) do
+    entity
+    |> Query.children()
+    |> then(&unwrap/1)
+    |> Enum.map(&{&1, unwrap(Query.list_components(&1))})
+    |> Enum.map(fn {entity, components} = tuple ->
+      {tuple, on_child_delete.(entity, components)}
+    end)
+    |> Enum.each(&maybe_despawn_child(&1, on_child_delete))
+
+    {:ok, components} = Config.backend().delete_components_for(entity)
+    :ok = Config.backend().delete_entity(entity)
+
+    {entity, components}
+  end
+
   defp maybe_despawn_child({_tuple, :ignore}, _on_child_delete), do: :ok
 
   defp maybe_despawn_child({{entity, _components}, :delete}, on_child_delete) do
-    despawn_entity(entity, on_child_delete)
+    do_despawn_entity(entity, on_child_delete)
   end
 
   defp maybe_despawn_child({tuple, value}, _on_child_delete) do
