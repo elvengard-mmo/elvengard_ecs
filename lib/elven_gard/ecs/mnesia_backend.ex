@@ -434,23 +434,24 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp insert_new(record) do
-    do_insert_new(
-      elem(record, 0),
-      elem(record, 1),
-      record,
-      :mnesia.is_transaction()
-    )
-  end
+    case :mnesia.is_transaction() do
+      true ->
+        do_insert_new(record)
 
-  defp do_insert_new(type, key, record, false) do
-    case :mnesia.dirty_read({type, key}) do
-      [] -> :mnesia.dirty_write(record)
-      _ -> {:error, :already_exists}
+      false ->
+        insert_new_in_transaction(record)
     end
   end
 
-  defp do_insert_new(type, key, record, true) do
-    case :mnesia.wread({type, key}) do
+  defp insert_new_in_transaction(record) do
+    case :mnesia.transaction(fn -> do_insert_new(record) end) do
+      {:atomic, :ok} -> :ok
+      {:aborted, :already_exists} -> {:error, :already_exists}
+    end
+  end
+
+  defp do_insert_new(record) do
+    case :mnesia.wread({elem(record, 0), elem(record, 1)}) do
       [] -> :mnesia.write(record)
       _ -> :mnesia.abort(:already_exists)
     end
