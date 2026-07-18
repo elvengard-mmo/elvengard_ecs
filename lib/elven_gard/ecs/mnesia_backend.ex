@@ -122,7 +122,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   def select_entities(without_parent: parent) do
     # entity_id, parent_id, partition
     match = {Entity, :"$1", :"$2", :"$3"}
-    guards = [{:"=/=", :"$2", escape_id(parent_id(parent))}]
+    guards = [{:"=/=", :"$2", escape_match_spec_constant(parent_id(parent))}]
     return = [:"$1"]
     query = [{match, guards, return}]
 
@@ -330,9 +330,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp build_entity_struct(id), do: %Entity{id: id}
 
-  # I don't know why but you need to wrap tuples inside another tuple in select/dirty_select
-  defp escape_id(id) when is_tuple(id), do: {id}
-  defp escape_id(id), do: id
+  # Mnesia match-specs require tuple constants to be wrapped in another tuple.
+  defp escape_match_spec_constant(value) do
+    case is_tuple(value) do
+      true -> {value}
+      false -> value
+    end
+  end
 
   defp record_to_struct(entity_record) do
     entity_record
@@ -533,7 +537,9 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       |> Enum.map(fn
         {component_mod, specs} ->
           specs
-          |> Enum.map(fn {op, field, value} -> {op, {:map_get, field, :"$4"}, value} end)
+          |> Enum.map(fn {op, field, value} ->
+            {op, {:map_get, field, :"$4"}, escape_match_spec_constant(value)}
+          end)
           |> Enum.reduce(&{:andalso, &1, &2})
           |> then(&{:andalso, {:==, :"$3", component_mod}, &1})
 

@@ -134,6 +134,18 @@ defmodule ElvenGard.ECS.QueryTest do
       assert %PositionComponent{map_id: 1, pos_x: 0, pos_y: 0} in components2
     end
 
+    test "component specs support tuple values" do
+      map_id = {:map, make_ref()}
+      entity = spawn_entity(components: [{PositionComponent, map_id: map_id}])
+
+      query =
+        Query.select(Entity,
+          with: [{PositionComponent, [{:==, :map_id, map_id}]}]
+        )
+
+      assert [{^entity, [%PositionComponent{map_id: ^map_id}]}] = Query.all(query)
+    end
+
     test "Entities + with option returns only if every components match" do
       entity = spawn_entity(components: [PlayerComponent, {BuffComponent, buff_id: 123}])
 
