@@ -534,18 +534,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     guards =
       components
       |> Enum.reverse()
-      |> Enum.map(fn
-        {component_mod, specs} ->
-          specs
-          |> Enum.map(fn {op, field, value} ->
-            {op, {:map_get, field, :"$4"}, escape_match_spec_constant(value)}
-          end)
-          |> Enum.reduce(&{:andalso, &1, &2})
-          |> then(&{:andalso, {:==, :"$3", component_mod}, &1})
-
-        component_mod ->
-          {:==, :"$3", component_mod}
-      end)
+      |> Enum.map(&component_guard/1)
       |> Enum.reduce(&{:orelse, &1, &2})
       |> List.wrap()
 
@@ -553,6 +542,24 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     query = [{match, guards, result}]
 
     select(Component, query)
+  end
+
+  defp component_guard(component_spec) do
+    case component_spec do
+      {component_mod, []} ->
+        {:==, :"$3", component_mod}
+
+      {component_mod, specs} ->
+        specs
+        |> Enum.map(fn {op, field, value} ->
+          {op, {:map_get, field, :"$4"}, escape_match_spec_constant(value)}
+        end)
+        |> Enum.reduce(&{:andalso, &1, &2})
+        |> then(&{:andalso, {:==, :"$3", component_mod}, &1})
+
+      component_mod ->
+        {:==, :"$3", component_mod}
+    end
   end
 
   defp has_all_components({_entity_id, components}, mandatories) do

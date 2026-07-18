@@ -146,6 +146,13 @@ defmodule ElvenGard.ECS.QueryTest do
       assert [{^entity, [%PositionComponent{map_id: ^map_id}]}] = Query.all(query)
     end
 
+    test "component specs support an empty filter list" do
+      entity = spawn_entity(components: [PlayerComponent])
+      query = Query.select(Entity, with: [{PlayerComponent, []}])
+
+      assert Enum.find(Query.all(query), &match?({^entity, [%PlayerComponent{}]}, &1))
+    end
+
     test "Entities + with option returns only if every components match" do
       entity = spawn_entity(components: [PlayerComponent, {BuffComponent, buff_id: 123}])
 
