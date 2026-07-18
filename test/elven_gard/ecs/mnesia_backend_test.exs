@@ -4,6 +4,7 @@ defmodule ElvenGard.ECS.MnesiaBackendTest do
   use ExUnit.Case, async: true
 
   alias ElvenGard.ECS.{Component, Entity, MnesiaBackend}
+  alias ElvenGard.ECS.Components.PositionComponent
 
   test "initializes existing tables synchronously without keeping a process alive" do
     assert :ignore = MnesiaBackend.start_link([])
@@ -81,5 +82,54 @@ defmodule ElvenGard.ECS.MnesiaBackendTest do
     assert [:ok, :ok] = Task.await_many([parent_task, partition_task])
     assert {:ok, ^parent} = MnesiaBackend.parent(entity)
     assert {:ok, ^partition} = MnesiaBackend.partition(entity)
+  end
+
+  test "updates a component without losing concurrent changes" do
+    caller = self()
+    {:ok, entity} = MnesiaBackend.create_entity(make_ref(), nil, :default)
+    {:ok, %PositionComponent{}} = MnesiaBackend.add_component(entity, PositionComponent)
+    key = {Component, {entity.id, PositionComponent}}
+
+    lock_task =
+      Task.async(fn ->
+        :mnesia.transaction(fn ->
+          [_record] = :mnesia.wread(key)
+          send(caller, :component_locked)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    assert_receive(:component_locked)
+
+    update_tasks = [
+      Task.async(fn ->
+        send(caller, {:update_started, self()})
+        MnesiaBackend.update_component(entity, PositionComponent, pos_x: 1)
+      end),
+      Task.async(fn ->
+        send(caller, {:update_started, self()})
+        MnesiaBackend.update_component(entity, PositionComponent, pos_y: 2)
+      end)
+    ]
+
+    update_pids = Enum.map(update_tasks, & &1.pid)
+
+    Enum.each(update_tasks, fn _task ->
+      assert_receive({:update_started, pid})
+      assert pid in update_pids
+    end)
+
+    Enum.each(update_tasks, fn task -> refute Task.yield(task, 50) end)
+
+    send(lock_task.pid, :release)
+
+    assert {:atomic, :ok} = Task.await(lock_task)
+    assert Enum.all?(Task.await_many(update_tasks), &match?({:ok, %PositionComponent{}}, &1))
+
+    assert {:ok, [%PositionComponent{pos_x: 1, pos_y: 2}]} =
+             MnesiaBackend.fetch_components(entity, PositionComponent)
   end
 end

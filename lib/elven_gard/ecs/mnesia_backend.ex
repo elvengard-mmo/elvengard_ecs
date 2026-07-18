@@ -251,43 +251,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
           {:ok, Component.t()} | {:error, :not_found | :multiple_values}
-  def update_component(%Entity{id: owner_id} = entity, %component_mod{} = component, attrs) do
-    components =
-      {Component, {owner_id, component_mod}}
-      |> read()
-      |> Enum.filter(&(component(&1, :component) == component))
-
-    case components do
-      [] ->
-        {:error, :not_found}
-
-      [record] ->
-        :ok = delete_object(record)
-        component = record |> component(:component) |> struct!(attrs)
-        add_component(entity, component)
-
-      _ ->
-        # Normally this case shouldn't be possible because Mnesia doesn't support duplicate bag
-        {:error, :multiple_values}
-    end
+  def update_component(%Entity{id: owner_id}, %component_mod{} = component, attrs) do
+    update_component(owner_id, component_mod, component, attrs)
   end
 
-  def update_component(%Entity{id: owner_id} = entity, component_mod, attrs)
+  def update_component(%Entity{id: owner_id}, component_mod, attrs)
       when is_atom(component_mod) do
-    components = read({Component, {owner_id, component_mod}})
-
-    case components do
-      [] ->
-        {:error, :not_found}
-
-      [record] ->
-        :ok = delete_object(record)
-        component = record |> component(:component) |> struct!(attrs)
-        add_component(entity, component)
-
-      _ ->
-        {:error, :multiple_values}
-    end
+    update_component(owner_id, component_mod, :all, attrs)
   end
 
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
@@ -414,6 +384,51 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case :mnesia.is_transaction() do
       true -> :mnesia.write(record)
       false -> :mnesia.dirty_write(record)
+    end
+  end
+
+  defp update_component(owner_id, component_mod, selector, attrs) do
+    case :mnesia.is_transaction() do
+      true -> do_update_component(owner_id, component_mod, selector, attrs)
+      false -> update_component_in_transaction(owner_id, component_mod, selector, attrs)
+    end
+  end
+
+  defp update_component_in_transaction(owner_id, component_mod, selector, attrs) do
+    case :mnesia.transaction(fn ->
+           do_update_component(owner_id, component_mod, selector, attrs)
+         end) do
+      {:atomic, result} -> result
+    end
+  end
+
+  defp do_update_component(owner_id, component_mod, selector, attrs) do
+    {Component, {owner_id, component_mod}}
+    |> :mnesia.wread()
+    |> select_component_records(selector)
+    |> replace_component_record(attrs)
+  end
+
+  defp select_component_records(records, selector) do
+    case selector do
+      :all -> records
+      selected -> Enum.filter(records, &(component(&1, :component) == selected))
+    end
+  end
+
+  defp replace_component_record(records, attrs) do
+    case records do
+      [] ->
+        {:error, :not_found}
+
+      [record] ->
+        :ok = :mnesia.delete_object(record)
+        updated_component = record |> component(:component) |> struct!(attrs)
+        :ok = record |> component(component: updated_component) |> :mnesia.write()
+        {:ok, updated_component}
+
+      _ ->
+        {:error, :multiple_values}
     end
   end
 
