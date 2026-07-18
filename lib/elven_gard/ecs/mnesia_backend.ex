@@ -261,10 +261,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     delete({Component, {id, component}})
   end
 
-  def delete_component(%Entity{id: id}, %component_mod{} = component) do
-    read({Component, {id, component_mod}})
-    |> Enum.filter(&(component(&1, :component) == component))
-    |> Enum.each(&delete_object/1)
+  def delete_component(%Entity{id: owner_id}, %component_mod{} = component) do
+    case :mnesia.is_transaction() do
+      true -> do_delete_component(owner_id, component_mod, component)
+      false -> delete_component_in_transaction(owner_id, component_mod, component)
+    end
   end
 
   @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
@@ -407,6 +408,22 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       true -> :mnesia.write(record)
       false -> :mnesia.dirty_write(record)
     end
+  end
+
+  defp delete_component_in_transaction(owner_id, component_mod, component) do
+    {:atomic, :ok} =
+      :mnesia.transaction(fn ->
+        do_delete_component(owner_id, component_mod, component)
+      end)
+
+    :ok
+  end
+
+  defp do_delete_component(owner_id, component_mod, selected_component) do
+    {Component, {owner_id, component_mod}}
+    |> :mnesia.wread()
+    |> Enum.filter(&(component(&1, :component) == selected_component))
+    |> Enum.each(&:mnesia.delete_object/1)
   end
 
   defp replace_component_in_transaction(record) do

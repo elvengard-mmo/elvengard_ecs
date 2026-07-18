@@ -368,6 +368,42 @@ defmodule ElvenGard.ECS.CommandTest do
       assert :ok = Command.delete_component(entity, %BuffComponent{buff_id: 34})
       assert {:ok, []} = Query.list_components(entity)
     end
+
+    test "by structure is atomic" do
+      caller = self()
+      component = %PositionComponent{pos_x: 42}
+      entity = spawn_entity(components: [component])
+      key = {Component, {entity.id, PositionComponent}}
+
+      lock_task =
+        Task.async(fn ->
+          :mnesia.transaction(fn ->
+            [_record] = :mnesia.wread(key)
+            send(caller, :component_locked)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :component_locked
+
+      delete_task =
+        Task.async(fn ->
+          send(caller, :delete_started)
+          Command.delete_component(entity, component)
+        end)
+
+      assert_receive :delete_started
+      refute Task.yield(delete_task, 50)
+
+      send(lock_task.pid, :release)
+
+      assert {:atomic, :ok} = Task.await(lock_task)
+      assert :ok = Task.await(delete_task)
+      assert {:ok, []} = Query.fetch_components(entity, PositionComponent)
+    end
   end
 
   describe "replace_component/2" do
