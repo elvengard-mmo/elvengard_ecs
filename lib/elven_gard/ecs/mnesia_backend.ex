@@ -240,6 +240,22 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     add_component(entity, Component.spec_to_struct(component_spec))
   end
 
+  @spec replace_component(Entity.t(), Component.t()) :: :ok
+  def replace_component(%Entity{id: owner_id}, %component_mod{} = component) do
+    record =
+      component(
+        composite_key: {owner_id, component_mod},
+        owner_id: owner_id,
+        type: component_mod,
+        component: component
+      )
+
+    case :mnesia.is_transaction() do
+      true -> do_replace_component(record)
+      false -> replace_component_in_transaction(record)
+    end
+  end
+
   @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
   def delete_component(%Entity{id: id}, component) when is_atom(component) do
     delete({Component, {id, component}})
@@ -391,6 +407,18 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       true -> :mnesia.write(record)
       false -> :mnesia.dirty_write(record)
     end
+  end
+
+  defp replace_component_in_transaction(record) do
+    case :mnesia.transaction(fn -> do_replace_component(record) end) do
+      {:atomic, :ok} -> :ok
+    end
+  end
+
+  defp do_replace_component(record) do
+    composite_key = component(record, :composite_key)
+    :ok = :mnesia.delete({Component, composite_key})
+    :mnesia.write(record)
   end
 
   defp update_component(owner_id, component_mod, selector, attrs) do

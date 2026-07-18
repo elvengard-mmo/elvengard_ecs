@@ -1,7 +1,7 @@
 defmodule ElvenGard.ECS.CommandTest do
   use ElvenGard.ECS.EntityCase, async: true
 
-  alias ElvenGard.ECS.{Command, Entity, Query}
+  alias ElvenGard.ECS.{Command, Component, Entity, Query}
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
 
   ## Tests
@@ -371,6 +371,43 @@ defmodule ElvenGard.ECS.CommandTest do
       assert :ok = Command.replace_component(entity, %BuffComponent{buff_id: 1337})
       {:ok, components} = Query.list_components(entity)
       assert [%BuffComponent{buff_id: 1337}] = components
+    end
+
+    test "is atomic" do
+      caller = self()
+      entity = spawn_entity(components: [PositionComponent])
+      key = {Component, {entity.id, PositionComponent}}
+
+      lock_task =
+        Task.async(fn ->
+          :mnesia.transaction(fn ->
+            [_record] = :mnesia.wread(key)
+            send(caller, :component_locked)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :component_locked
+
+      replace_task =
+        Task.async(fn ->
+          send(caller, :replace_started)
+          Command.replace_component(entity, %PositionComponent{pos_x: 42})
+        end)
+
+      assert_receive :replace_started
+      refute Task.yield(replace_task, 50)
+
+      send(lock_task.pid, :release)
+
+      assert {:atomic, :ok} = Task.await(lock_task)
+      assert :ok = Task.await(replace_task)
+
+      assert {:ok, [%PositionComponent{pos_x: 42}]} =
+               Query.fetch_components(entity, PositionComponent)
     end
   end
 
