@@ -1,8 +1,24 @@
 defmodule ElvenGard.ECS.Event do
   @moduledoc """
-  TODO: Documentation for ElvenGard.ECS.Event
+  Defines messages consumed by event-driven systems.
+
+  Define an event with optional fields:
+
+      defmodule MyGame.DamageTaken do
+        use ElvenGard.ECS.Event, fields: [entity: nil, amount: 0]
+      end
+
+  Every event also contains:
+
+    * `:partition` - destination partition, defaulting to `:default`
+    * `:inserted_at` - monotonic dispatch timestamp, populated by
+      `ElvenGard.ECS.push/2`
+
+  Dispatch events through `ElvenGard.ECS.push/2` rather than calling an event
+  source directly when the timestamp is required.
   """
 
+  @typedoc "An event struct containing `:partition` and `:inserted_at` fields."
   @type t :: struct()
 
   @doc false

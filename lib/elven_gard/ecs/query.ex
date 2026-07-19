@@ -1,8 +1,12 @@
 defmodule ElvenGard.ECS.Query do
   @moduledoc """
-  TODO: Documentation for ElvenGard.ECS.Query
+  Read API for entities, components, and relationships.
 
-  TL;DR: Read from Backend
+  Queries are immutable descriptions built by `select/2` and executed by
+  `all/1` or `one/1`. Convenience functions provide direct lookups for an
+  entity and its components.
+
+  Reads are delegated to the backend configured under `:elvengard_ecs`.
   """
 
   alias __MODULE__
@@ -13,10 +17,20 @@ defmodule ElvenGard.ECS.Query do
   defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity, :partition]
 
   @typep component_module :: module()
+
+  @typedoc "A backend match operator, component field, and expected value."
   @type component_filter :: {atom(), atom(), term()}
+
+  @typedoc "A component module, optionally constrained by field filters."
   @type query_component :: component_module() | {component_module(), [component_filter()]}
+
+  @typedoc "Entity, component, or tuple shape returned by a query."
   @type return_type :: Entity | component_module() | tuple()
+
+  @typedoc "A value returned by `all/1` or `one/1`."
   @type result :: {Entity.t(), [Component.t()]} | Component.t() | tuple()
+
+  @typedoc "An executable query description."
   @type t :: %Query{
           return_type: return_type(),
           components: [query_component()],
@@ -28,7 +42,25 @@ defmodule ElvenGard.ECS.Query do
 
   ## General
 
-  # FIXME: Clean this functions
+  @doc """
+  Builds a query for entities, components, or a tuple of both.
+
+  The return type controls each result:
+
+    * `ElvenGard.ECS.Entity` returns `{entity, components}`
+    * a component module returns matching component structs
+    * a tuple such as `{ElvenGard.ECS.Entity, Position}` returns tuples with
+      the requested values; optional missing components are returned as `nil`
+
+  Supported options are:
+
+    * `:with` - component modules that every result must contain. A component
+      can be constrained with `{module, [{operator, field, value}]}`.
+    * `:preload` - component modules included with entity results, or `:all`.
+    * `:partition` - restricts results to one partition; defaults to `:any`.
+
+  Component modules named in a tuple return type are loaded automatically.
+  """
   @spec select(return_type(), Keyword.t()) :: t()
   def select(type, query \\ []) do
     with_components = Keyword.get(query, :with, [])
@@ -81,11 +113,18 @@ defmodule ElvenGard.ECS.Query do
     }
   end
 
+  @doc "Executes a query and returns all matching results."
   @spec all(Query.t()) :: [result()]
   def all(%Query{} = query) do
     Config.backend().all(query)
   end
 
+  @doc """
+  Executes a query expected to match at most one result.
+
+  Returns `nil` when there is no match and raises when more than one result is
+  returned.
+  """
   @spec one(Query.t()) :: result() | nil
   def one(%Query{} = query) do
     case Config.backend().all(query) do
@@ -95,6 +134,12 @@ defmodule ElvenGard.ECS.Query do
     end
   end
 
+  @doc """
+  Selects entities using one direct backend criterion.
+
+  The default backend supports `with_parent: entity`,
+  `without_parent: entity`, and `with_component: module`.
+  """
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
   def select_entities(query) do
     Config.backend().select_entities(query)
@@ -103,7 +148,7 @@ defmodule ElvenGard.ECS.Query do
   ## Entities
 
   @doc """
-  Fetches an `ElvenGard.ECS.Entity.t()` by its ID.
+  Fetches an entity by its ID.
   """
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
@@ -121,7 +166,7 @@ defmodule ElvenGard.ECS.Query do
   ## Relationships
 
   @doc """
-  Returns the list of parent entities for the given entity.
+  Returns the direct parent of an entity, or `nil` for a root entity.
   """
   @spec parent(Entity.t()) :: {:ok, nil | Entity.t()} | {:error, :not_found}
   def parent(%Entity{} = entity) do
@@ -129,7 +174,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  Returns the list of child entities for the given entity.
+  Returns the direct children of an entity.
   """
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
   def children(%Entity{} = entity) do
@@ -137,7 +182,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  Reurns `true` if a given entity is a parent of another entity.
+  Returns whether the first entity is the direct parent of the second entity.
   """
   @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
   def parent_of?(%Entity{} = maybe_parent, %Entity{} = maybe_child) do
@@ -145,7 +190,7 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  Reurns `true` if a given entity is a child of another entity.
+  Returns whether the first entity is a direct child of the second entity.
   """
   @spec child_of?(Entity.t(), Entity.t()) :: boolean()
   def child_of?(%Entity{} = maybe_child, %Entity{} = maybe_parent) do
@@ -155,7 +200,10 @@ defmodule ElvenGard.ECS.Query do
   ## Components
 
   @doc """
-  Lists all the components for a given entity.
+  Lists all components owned by an entity.
+
+  This lookup does not separately verify that the entity exists, so an unknown
+  entity and an entity without components both return `{:ok, []}`.
   """
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
   def list_components(%Entity{} = entity) do
@@ -163,7 +211,10 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  Fetches ALL components by there module for a given entity.
+  Fetches every component of one module owned by an entity.
+
+  Multiple components of the same module are supported. This lookup does not
+  separately verify that the entity exists.
   """
   @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
   def fetch_components(%Entity{} = entity, component) when is_atom(component) do
@@ -171,7 +222,11 @@ defmodule ElvenGard.ECS.Query do
   end
 
   @doc """
-  Fetches the component by its module for a given entity.
+  Fetches the single component of one module owned by an entity.
+
+  Returns `{:error, :not_found}` when there is no match and raises when the
+  entity owns multiple components of that module. Use `fetch_components/2`
+  when multiple values are valid.
   """
   @spec fetch_component(Entity.t(), module()) :: {:ok, Component.t()} | {:error, :not_found}
   def fetch_component(%Entity{} = entity, component) when is_atom(component) do

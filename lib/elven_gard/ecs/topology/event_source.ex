@@ -1,6 +1,23 @@
 defmodule ElvenGard.ECS.Topology.EventSource do
   @moduledoc """
-  TODO: ElvenGard.ECS.Topology.EventSource
+  Routes events to partitions.
+
+  An event source accepts one subscriber process per partition identifier.
+  Events dispatched before that partition subscribes are buffered in order.
+  Each unconsumed partition keeps at most 10,000 events; older events are
+  dropped with a warning when the limit is exceeded.
+
+  Subscribers are monitored and automatically removed when they terminate.
+  The default event source uses a global name. Applications normally start it
+  before their `ElvenGard.ECS.Topology.Partition` children:
+
+      children = [
+        ElvenGard.ECS.Topology.EventSource,
+        {MyGame.WorldPartition, id: :world}
+      ]
+
+  A local or custom event source can be started with `name: name` and passed to
+  each partition through its `:event_source` option.
   """
 
   use GenServer
@@ -13,23 +30,46 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   ## Public API
 
+  @doc """
+  Starts an event source.
+
+  The `:name` option defaults to the global name used by `subscribe/1` and
+  `dispatch/1`. Starting another source with that default name returns
+  `:ignore` when one is already registered.
+  """
   @spec start_link(Keyword.t()) :: GenServer.on_start()
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name, name())
     do_start_link(name, opts)
   end
 
+  @doc """
+  Subscribes the calling process to one partition.
+
+  The required `:partition` option identifies the events delivered to the
+  caller. Only one process may own a partition at a time. Buffered events are
+  delivered immediately after a successful subscription.
+  """
   @spec subscribe(GenServer.server(), Keyword.t()) :: :ok | {:error, :already_exists}
   def subscribe(name \\ name(), opts) do
     partition = validate_partition(opts)
     GenServer.call(name, {:subscribe, partition})
   end
 
+  @doc """
+  Asynchronously unsubscribes the calling process from an event source.
+  """
   @spec unsubscribe(GenServer.server()) :: :ok
   def unsubscribe(name \\ name()) do
     GenServer.cast(name, {:unsubscribe, self()})
   end
 
+  @doc """
+  Asynchronously dispatches events according to their `:partition` field.
+
+  Use `ElvenGard.ECS.push/2` when events must also receive an `:inserted_at`
+  timestamp.
+  """
   @spec dispatch(GenServer.server(), [Event.t()]) :: :ok
   def dispatch(name \\ name(), events) do
     GenServer.cast(name, {:dispatch, events})
@@ -127,7 +167,7 @@ defmodule ElvenGard.ECS.Topology.EventSource do
   end
 
   defp partition_exists?(partitions, partition) do
-    partition in Map.keys(partitions)
+    Map.has_key?(partitions, partition)
   end
 
   defp dispatch_events([], _partitions, discarded), do: discarded

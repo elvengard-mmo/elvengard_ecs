@@ -1,12 +1,24 @@
 defmodule ElvenGard.ECS.Topology do
   @moduledoc """
-  TODO: Documentation for ElvenGard.ECS.Topology
+  Helpers for coordinating ECS topology processes.
+
+  Event sources and partitions are supervised by the host application. Use
+  `wait_for_partitions/2` when another child must not continue until every
+  partition has finished its startup systems and subscribed to its event
+  source.
   """
 
   alias ElvenGard.ECS.Topology.Partition
 
   ## Public API
 
+  @doc """
+  Waits until every partition reports that startup is complete.
+
+  Returns `:ok` for an empty list or when every partition starts before the
+  timeout. Returns `{:error, :timeout}` otherwise.
+  """
+  @spec wait_for_partitions([GenServer.server()], timeout()) :: :ok | {:error, :timeout}
   def wait_for_partitions(pids, timeout \\ 5000)
 
   def wait_for_partitions([], _timeout), do: :ok

@@ -1,16 +1,27 @@
 defmodule ElvenGard.ECS.MnesiaBackend do
   @moduledoc """
-  TODO: Documentation for ElvenGard.ECS.MnesiaBackend
+  Default Mnesia storage backend for ElvenGard.ECS.
 
-  TODO: Write a module for Entities and Components serialization instead of having raw tuples
+  The backend stores entity relationships and partitions in one table and
+  component ownership and values in another. Tables are initialized
+  synchronously when the application starts; no resident backend process is
+  kept after initialization.
 
-  Entity Table:
+  Applications normally access this module through `ElvenGard.ECS.Command` and
+  `ElvenGard.ECS.Query`. The lower-level functions remain public for custom
+  integrations and are transaction-aware: they use the current Mnesia
+  transaction when one exists and otherwise select the appropriate dirty or
+  transactional operation.
 
-    | entity_id | parent_id or nil | partition or default |
+  ## Tables
 
-  Component Table
+  Entity records contain the entity ID, optional parent ID, and partition.
+  Component records contain `{owner_id, component_module}`, the owner ID, the
+  component module, and the component struct. The component table is a bag, so
+  one entity may own multiple distinct values of the same component module.
 
-    | {owner_id, component_type} | owner_id | component_type | component |
+  Parent changes and component read-modify-write operations use write locks to
+  protect against lost updates. Parent cycles are rejected.
 
   """
 
@@ -23,6 +34,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Public API
 
+  @doc false
   @spec child_spec(Keyword.t()) :: Supervisor.child_spec()
   def child_spec(opts) do
     %{
@@ -32,6 +44,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     }
   end
 
+  @doc false
   @spec start_link(Keyword.t()) :: :ignore
   def start_link(_opts) do
     :ok = init_mnesia()
@@ -40,6 +53,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## Transactions
 
+  @doc "Executes a function in a Mnesia transaction."
   @spec transaction((-> result)) :: {:error, any()} | {:ok, result} when result: any()
   def transaction(query) do
     case :mnesia.transaction(query) do
@@ -48,6 +62,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Aborts the current Mnesia transaction with `reason`."
   @spec abort(any()) :: no_return()
   def abort(reason) do
     :mnesia.abort(reason)
@@ -55,6 +70,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ## General Queries
 
+  @doc "Executes a query description and returns its matching values."
   @spec all(Query.t()) :: [Query.result()]
   def all(%Query{return_entity: true, mandatories: []} = query) do
     %Query{
@@ -109,8 +125,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ### Entities
 
-  # TODO: Rewrite this fuction to me more generic and support operators like
-  # "and", "or" and "multiple queries"
+  @doc """
+  Selects entities by one indexed relationship or component criterion.
+
+  Supported criteria are `with_parent: entity`, `without_parent: entity`, and
+  `with_component: module`.
+  """
   @spec select_entities(Keyword.t()) :: {:ok, [Entity.t()]}
   def select_entities(with_parent: parent) do
     Entity
@@ -141,6 +161,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
+  @doc """
+  Creates an entity when its ID is unused and its parent does not create a
+  cycle.
+  """
   @spec create_entity(Entity.id(), Entity.t() | nil, Entity.partition()) ::
           {:ok, Entity.t()} | {:error, :already_exists | :cyclic_relationship}
   def create_entity(id, parent, partition) do
@@ -153,6 +177,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Fetches an entity by ID."
   @spec fetch_entity(Entity.id()) :: {:ok, Entity.t()} | {:error, :not_found}
   def fetch_entity(id) do
     case read({Entity, id}) do
@@ -161,6 +186,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Fetches the direct parent of an entity."
   @spec parent(Entity.t()) :: {:ok, nil | Entity.t()} | {:error, :not_found}
   def parent(%Entity{id: id}) do
     case read({Entity, id}) do
@@ -170,12 +196,14 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Sets or clears an entity's direct parent while preventing cycles."
   @spec set_parent(Entity.t(), Entity.t() | nil) ::
           :ok | {:error, :cyclic_relationship | :not_found}
   def set_parent(%Entity{id: id}, parent) do
     update_entity(id, :parent_id, parent)
   end
 
+  @doc "Fetches an entity's partition."
   @spec partition(Entity.t()) :: {:ok, Entity.partition()} | {:error, :not_found}
   def partition(%Entity{id: id}) do
     case read({Entity, id}) do
@@ -184,11 +212,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Sets an entity's partition."
   @spec set_partition(Entity.t(), Entity.partition()) :: :ok | {:error, :not_found}
   def set_partition(%Entity{id: id}, partition) do
     update_entity(id, :partition, partition)
   end
 
+  @doc "Returns the direct children of an entity."
   @spec children(Entity.t()) :: {:ok, [Entity.t()]}
   def children(%Entity{id: id}) do
     Entity
@@ -201,6 +231,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
+  @doc "Returns whether the first entity is the direct parent of the second."
   @spec parent_of?(Entity.t(), Entity.t()) :: boolean()
   def parent_of?(%Entity{id: parent_id}, %Entity{id: child_id}) do
     case read({Entity, child_id}) do
@@ -216,6 +247,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc "Deletes an entity record without deleting its components."
   @spec delete_entity(Entity.t()) :: :ok
   def delete_entity(%Entity{id: id}) do
     delete({Entity, id})
@@ -223,6 +255,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   ### Components
 
+  @doc "Adds a component value to an entity."
   @spec add_component(Entity.t(), Component.spec() | Component.t()) :: {:ok, Component.t()}
   def add_component(%Entity{id: id}, %component_mod{} = component) do
     component(
@@ -240,6 +273,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     add_component(entity, Component.spec_to_struct(component_spec))
   end
 
+  @doc "Replaces every component of the same module with one component value."
   @spec replace_component(Entity.t(), Component.t()) :: :ok
   def replace_component(%Entity{id: owner_id}, %component_mod{} = component) do
     record =
@@ -256,6 +290,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc """
+  Deletes components by module or by exact value.
+
+  Passing a module deletes every value of that module. Passing a struct deletes
+  values equal to that struct.
+  """
   @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
   def delete_component(%Entity{id: id}, component) when is_atom(component) do
     delete({Component, {id, component}})
@@ -268,6 +308,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
+  @doc """
+  Updates one component selected by module or exact value.
+
+  A module selector returns `:multiple_values` when more than one value exists.
+  """
   @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
           {:ok, Component.t()} | {:error, :not_found | :multiple_values}
   def update_component(%Entity{id: owner_id}, %component_mod{} = component, attrs) do
@@ -279,6 +324,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     update_component(owner_id, component_mod, :all, attrs)
   end
 
+  @doc "Lists every component owned by an entity."
   @spec list_components(Entity.t()) :: {:ok, [Component.t()]}
   def list_components(%Entity{id: id}) do
     Component
@@ -289,6 +335,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
+  @doc "Fetches every component of one module owned by an entity."
   @spec fetch_components(Entity.t(), module()) :: {:ok, [Component.t()]}
   def fetch_components(%Entity{id: owner_id}, component) do
     {Component, {owner_id, component}}
@@ -297,6 +344,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> then(&{:ok, &1})
   end
 
+  @doc "Deletes and returns every component owned by an entity."
   @spec delete_components_for(Entity.t()) :: {:ok, [Component.t()]}
   def delete_components_for(%Entity{id: owner_id}) do
     components = index_read(Component, owner_id, :owner_id)
@@ -572,7 +620,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp select_components_by_type(components) do
-    # TODO: Generate the select query
     match = {Component, :_, :_, :"$3", :"$4"}
 
     guards =

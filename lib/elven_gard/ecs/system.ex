@@ -1,14 +1,39 @@
 defmodule ElvenGard.ECS.System do
   @moduledoc """
-  TODO: Documentation for ElvenGard.ECS.System
+  Behaviour for logic executed by an `ElvenGard.ECS.Topology.Partition`.
+
+  A system may run every tick through `run/1`, react to selected event modules
+  through `run/2`, or implement both callbacks:
+
+      defmodule MyGame.MovementSystem do
+        use ElvenGard.ECS.System,
+          lock_components: [MyGame.Position],
+          event_subscriptions: [MyGame.MoveRequested]
+
+        @impl true
+        def run(%MyGame.MoveRequested{} = event, context) do
+          # Update positions for the event and partition.
+        end
+      end
+
+  The required `:lock_components` option controls which systems may share an
+  execution batch. Systems with overlapping component locks are serialized.
+  Use `:sync` to run a system in an isolated batch. These locks are scheduling
+  metadata; they do not open a backend transaction.
   """
 
   ## Behaviour
 
+  @typedoc "Elapsed milliseconds for a regular tick, or `:startup`."
   @type delta :: non_neg_integer() | :startup
+
+  @typedoc "Context passed to every system callback."
   @type context :: %{partition: any(), delta: delta()}
 
+  @doc "Runs once per partition tick when implemented."
   @callback run(context :: context()) :: any()
+
+  @doc "Runs once for every subscribed event received by the partition."
   @callback run(event :: struct(), context :: context()) :: any()
 
   @optional_callbacks [run: 1, run: 2]

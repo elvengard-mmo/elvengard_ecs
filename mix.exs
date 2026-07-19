@@ -3,7 +3,7 @@ defmodule ElvenGard.ECS.MixProject do
 
   @app_name "ElvenGard.ECS"
   @version "0.1.0"
-  # @github_link "https://github.com/ImNotAVirus/elvengard_ecs"
+  @github_link "https://github.com/ImNotAVirus/elvengard_ecs"
 
   def project() do
     [
@@ -13,6 +13,7 @@ defmodule ElvenGard.ECS.MixProject do
       start_permanent: Mix.env() == :prod,
       name: @app_name,
       description: "Game server toolkit written in Elixir # ECS",
+      docs: docs(),
       deps: deps(),
       elixirc_paths: elixirc_paths(Mix.env()),
       elixirc_options: [warnings_as_errors: true],
@@ -39,6 +40,7 @@ defmodule ElvenGard.ECS.MixProject do
   defp deps() do
     [
       {:telemetry, "~> 1.2"},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
@@ -51,6 +53,59 @@ defmodule ElvenGard.ECS.MixProject do
         "credo --strict",
         "test --warnings-as-errors --cover"
       ]
+    ]
+  end
+
+  defp docs() do
+    [
+      main: @app_name,
+      source_ref: "v#{@version}",
+      source_url: @github_link,
+      extra_section: "GUIDES",
+      extras: extras(),
+      groups_for_extras: groups_for_extras(),
+      groups_for_modules: groups_for_modules()
+    ]
+  end
+
+  defp extras() do
+    Enum.concat(
+      ["README.md": [title: "Overview"]],
+      [
+        "CHANGELOG.md",
+        "guides/introduction/getting_started.md",
+        "guides/introduction/entities_and_components.md",
+        "guides/introduction/queries.md",
+        "guides/introduction/transactions_and_relationships.md",
+        "guides/introduction/events_and_systems.md"
+      ]
+    )
+  end
+
+  defp groups_for_extras() do
+    [
+      Introduction: ~r/(README.md|guides\/introduction\/.?)/
+    ]
+  end
+
+  defp groups_for_modules() do
+    [
+      Core: [
+        ElvenGard.ECS,
+        ElvenGard.ECS.Entity,
+        ElvenGard.ECS.Component,
+        ElvenGard.ECS.Bundle,
+        ElvenGard.ECS.Command,
+        ElvenGard.ECS.Query
+      ],
+      Topology: [
+        ElvenGard.ECS.Event,
+        ElvenGard.ECS.System,
+        ElvenGard.ECS.Topology,
+        ElvenGard.ECS.Topology.EventSource,
+        ElvenGard.ECS.Topology.Partition
+      ],
+      Storage: [ElvenGard.ECS.MnesiaBackend]
     ]
   end
 end

@@ -1,6 +1,44 @@
 defmodule ElvenGard.ECS.Topology.Partition do
   @moduledoc """
-  TODO: ElvenGard.ECS.Topology.Partition
+  Runs systems for one logical partition of the game world.
+
+  Define a partition with `use ElvenGard.ECS.Topology.Partition` and implement
+  `setup/1`:
+
+      defmodule MyGame.WorldPartition do
+        use ElvenGard.ECS.Topology.Partition
+
+        @impl true
+        def setup(opts) do
+          id = Keyword.fetch!(opts, :id)
+
+          {id,
+           systems: [MyGame.MovementSystem],
+           startup_systems: [MyGame.LoadWorldSystem],
+           interval: 50}
+        end
+      end
+
+  A partition executes startup systems, subscribes to its event source, and
+  then schedules ticks. Systems are grouped into concurrent batches according
+  to their component locks and the configured concurrency limit.
+
+  Supported setup options are:
+
+    * `:systems` - required list of regular systems
+    * `:startup_systems` - systems executed once before event subscription
+    * `:interval` - milliseconds between scheduled ticks; `0` runs without an
+      intentional delay
+    * `:concurrency` - maximum concurrent systems; defaults to the number of
+      online schedulers
+    * `:event_source` - event source name or PID; defaults to the global source
+    * `:system_timeout` - timeout for one execution; defaults to `:infinity`
+
+  Partitions emit `:telemetry` spans under
+  `[:elvengard_ecs, :startup_system_run]` and
+  `[:elvengard_ecs, :system_run]`, plus a
+  `[:elvengard_ecs, :partition_init]` event after startup systems complete.
+
   """
 
   @behaviour GenServer
@@ -11,8 +49,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   ## Behaviour
 
+  @typedoc "Application-defined partition identifier."
   @type id :: any()
+
+  @typedoc "Partition identifier and runtime options returned by `setup/1`."
   @type partition_spec :: {id(), Keyword.t()}
+
+  @doc "Builds the partition identifier and runtime options."
   @callback setup(opts :: Keyword.t()) :: partition_spec()
 
   ## Public API
@@ -36,10 +79,15 @@ defmodule ElvenGard.ECS.Topology.Partition do
     end
   end
 
+  @doc false
   def start_link({_mod, _opts} = specs) do
     GenServer.start_link(__MODULE__, specs)
   end
 
+  @doc """
+  Returns whether a partition completed startup and subscribed to its event
+  source.
+  """
   @spec started?(GenServer.server(), timeout()) :: boolean()
   def started?(pid, timeout \\ 5000) do
     GenServer.call(pid, :started?, timeout)
