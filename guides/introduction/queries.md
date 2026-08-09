@@ -91,6 +91,58 @@ results = Query.all(query)
 Modules named in the tuple are loaded automatically. Components not listed in
 `:with` remain optional and appear as `nil` when absent.
 
+Pass `with: :selected` when every component named in the tuple must exist:
+
+```elixir
+query = Query.select({Entity, Player, Position}, with: :selected)
+```
+
+This is a shorthand for `with: [Player, Position]`; `Entity` is ignored when
+building the mandatory component list.
+
+## Materializing bundles
+
+A tuple query containing `Entity` can be materialized into a bundle declared
+with `ElvenGard.ECS.Bundle`:
+
+```elixir
+defmodule MyGame.PlayerBundle do
+  use ElvenGard.ECS.Bundle,
+    components: [
+      player: MyGame.Components.Player,
+      position: MyGame.Components.Position,
+      health: MyGame.Components.Health
+    ]
+
+  @impl true
+  def new(attrs), do: ElvenGard.ECS.Entity.entity_spec(attrs)
+end
+
+bundles = Query.all(query, into: MyGame.PlayerBundle)
+bundle = Query.one(query, into: MyGame.PlayerBundle)
+```
+
+Selected components populate their fields. Unselected fields contain
+`:not_loaded`, while a selected component that does not exist contains `nil`.
+Generated getters return the component, return `nil` for an absent component,
+and raise `ElvenGard.ECS.Bundle.NotLoadedError` for an unloaded field:
+
+```elixir
+position = MyGame.PlayerBundle.position(bundle)
+{:error, :not_loaded} = MyGame.PlayerBundle.fetch_health(bundle)
+```
+
+Preloading returns a new bundle and skips fields that were already loaded:
+
+```elixir
+bundle = MyGame.PlayerBundle.preload(bundle, [:position, :health])
+bundle = MyGame.PlayerBundle.preload(bundle, :position, force: true)
+```
+
+Use `force: true` to refresh a loaded component or recheck a previously absent
+component. Bundles require `Entity` in the tuple because later preloads need the
+component owner.
+
 ## Expecting one result
 
 `Query.one/1` returns `nil` for no match and the value itself for exactly one
@@ -117,4 +169,3 @@ The default backend also provides direct indexed selections:
 ```
 
 Each call accepts one criterion.
-

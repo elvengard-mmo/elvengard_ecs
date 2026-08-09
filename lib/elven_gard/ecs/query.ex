@@ -3,14 +3,14 @@ defmodule ElvenGard.ECS.Query do
   Read API for entities, components, and relationships.
 
   Queries are immutable descriptions built by `select/2` and executed by
-  `all/1` or `one/1`. Convenience functions provide direct lookups for an
-  entity and its components.
+  `all/1`, `all/2`, `one/1`, or `one/2`. Convenience functions provide direct
+  lookups for an entity and its components.
 
   Reads are delegated to the backend configured under `:elvengard_ecs`.
   """
 
   alias __MODULE__
-  alias ElvenGard.ECS.{Component, Config, Entity}
+  alias ElvenGard.ECS.{Bundle, Component, Config, Entity}
 
   ## Struct
 
@@ -29,6 +29,9 @@ defmodule ElvenGard.ECS.Query do
 
   @typedoc "A value returned by `all/1` or `one/1`."
   @type result :: {Entity.t(), [Component.t()]} | Component.t() | tuple()
+
+  @typedoc "A query tuple materialized into an application bundle."
+  @type bundle_result :: Bundle.t()
 
   @typedoc "An executable query description."
   @type t :: %Query{
@@ -120,6 +123,13 @@ defmodule ElvenGard.ECS.Query do
     Config.backend().all(query)
   end
 
+  @doc "Executes a tuple query and materializes every result into `bundle_module`."
+  @spec all(Query.t(), into: module()) :: [bundle_result()]
+  def all(%Query{} = query, into: bundle_module) when is_atom(bundle_module) do
+    results = Config.backend().all(query)
+    Bundle.load_many(bundle_module, query.return_type, results)
+  end
+
   @doc """
   Executes a query expected to match at most one result.
 
@@ -128,11 +138,15 @@ defmodule ElvenGard.ECS.Query do
   """
   @spec one(Query.t()) :: result() | nil
   def one(%Query{} = query) do
-    case Config.backend().all(query) do
-      [] -> nil
-      [result] -> result
-      results -> raise "Expected to return one result, got: `#{inspect(results)}`"
-    end
+    query |> all() |> one_result()
+  end
+
+  @doc "Executes a tuple query and materializes its single result into `bundle_module`."
+  @spec one(Query.t(), into: module()) :: bundle_result() | nil
+  def one(%Query{} = query, into: bundle_module) when is_atom(bundle_module) do
+    query
+    |> all(into: bundle_module)
+    |> one_result()
   end
 
   @doc """
@@ -238,7 +252,15 @@ defmodule ElvenGard.ECS.Query do
     end
   end
 
-  ## Helpers
+  ## Private function
+
+  defp one_result(results) do
+    case results do
+      [] -> nil
+      [result] -> result
+      values -> raise "Expected to return one result, got: `#{inspect(values)}`"
+    end
+  end
 
   defp normalize_with_components(type, :selected), do: selected_components(type)
   defp normalize_with_components(_type, components) when is_list(components), do: components
