@@ -165,6 +165,26 @@ defmodule ElvenGard.ECS.QueryTest do
       refute Enum.find(result, &match?({^entity, _}, &1))
     end
 
+    test "with :selected requires every component in a tuple return type" do
+      matching_entity =
+        spawn_entity(components: [PlayerComponent, {PositionComponent, map_id: 42}])
+
+      missing_position = spawn_entity(components: [PlayerComponent])
+      missing_player = spawn_entity(components: [PositionComponent])
+
+      query =
+        Query.select(
+          {Entity, PlayerComponent, PositionComponent},
+          with: :selected
+        )
+
+      results = Query.all(query)
+
+      assert {matching_entity, %PlayerComponent{}, %PositionComponent{map_id: 42}} in results
+      refute Enum.any?(results, &match?({^missing_position, _, _}, &1))
+      refute Enum.any?(results, &match?({^missing_player, _, _}, &1))
+    end
+
     test "Components list all" do
       ref = make_ref()
       _entity = spawn_entity(components: [{PositionComponent, map_id: ref}])

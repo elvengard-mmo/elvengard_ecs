@@ -55,7 +55,8 @@ defmodule ElvenGard.ECS.Query do
   Supported options are:
 
     * `:with` - component modules that every result must contain. A component
-      can be constrained with `{module, [{operator, field, value}]}`.
+      can be constrained with `{module, [{operator, field, value}]}`. Pass
+      `:selected` to require every component module in the return type.
     * `:preload` - component modules included with entity results, or `:all`.
     * `:partition` - restricts results to one partition; defaults to `:any`.
 
@@ -63,7 +64,7 @@ defmodule ElvenGard.ECS.Query do
   """
   @spec select(return_type(), Keyword.t()) :: t()
   def select(type, query \\ []) do
-    with_components = Keyword.get(query, :with, [])
+    with_components = normalize_with_components(type, Keyword.get(query, :with, []))
     preload = Keyword.get(query, :preload, [])
     partition = Keyword.get(query, :partition, :any)
 
@@ -238,6 +239,18 @@ defmodule ElvenGard.ECS.Query do
   end
 
   ## Helpers
+
+  defp normalize_with_components(type, :selected), do: selected_components(type)
+  defp normalize_with_components(_type, components) when is_list(components), do: components
+
+  defp selected_components(type) when is_tuple(type) do
+    type
+    |> Tuple.to_list()
+    |> Enum.reject(&(&1 == Entity))
+  end
+
+  defp selected_components(Entity), do: []
+  defp selected_components(component), do: [component]
 
   defp add_return_type(type, components, mandatories, component_mods) do
     case type do
