@@ -3,12 +3,50 @@ defmodule ElvenGard.ECS.MnesiaBackendTest do
 
   use ExUnit.Case, async: true
 
-  alias ElvenGard.ECS.{Component, Entity, MnesiaBackend}
+  alias ElvenGard.ECS.{Component, Entity, MnesiaBackend, Query}
   alias ElvenGard.ECS.Components.PositionComponent
 
   test "initializes existing tables synchronously without keeping a process alive" do
     assert :ignore = MnesiaBackend.start_link([])
     assert :ok = :mnesia.wait_for_tables([Entity, Component], 0)
+  end
+
+  test "partitioned queries avoid global component table scans" do
+    partition = make_ref()
+    {:ok, entity} = MnesiaBackend.create_entity(make_ref(), nil, partition)
+    {:ok, position} = MnesiaBackend.add_component(entity, PositionComponent)
+
+    test_pid = self()
+
+    tracer =
+      spawn_link(fn ->
+        receive do
+          message -> send(test_pid, {:ecs_trace, message})
+        after
+          100 -> :ok
+        end
+      end)
+
+    :erlang.trace_pattern({MnesiaBackend, :select_components_by_type, 1}, true, [:local])
+    :erlang.trace(self(), true, [:call, {:tracer, tracer}])
+
+    on_exit(fn ->
+      :erlang.trace(self(), false, [:call])
+
+      :erlang.trace_pattern(
+        {MnesiaBackend, :select_components_by_type, 1},
+        false,
+        [:local]
+      )
+    end)
+
+    query = Query.select(PositionComponent, partition: partition)
+
+    assert Query.all(query) == [position]
+
+    refute_receive {:ecs_trace,
+                    {:trace, _pid, :call, {MnesiaBackend, :select_components_by_type, _arguments}}},
+                   150
   end
 
   test "creates an entity only once under concurrent calls" do

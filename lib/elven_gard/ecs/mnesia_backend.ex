@@ -20,6 +20,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   component module, and the component struct. The component table is a bag, so
   one entity may own multiple distinct values of the same component module.
 
+  Partition-scoped queries start from the entity partition index and fetch
+  components only for those owners. Their component lookup cost therefore
+  scales with the selected partition instead of the global component table.
+
   Parent changes and component read-modify-write operations use write locks to
   protect against lost updates. Parent cycles are rejected.
 
@@ -72,23 +76,35 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @doc "Executes a query description and returns its matching values."
   @spec all(Query.t()) :: [Query.result()]
-  def all(%Query{return_entity: true, mandatories: []} = query) do
+  def all(%Query{partition: partition} = query) when partition != :any do
     %Query{
       return_type: return_type,
       components: components,
+      mandatories: mandatories,
       preload_all: preload_all,
-      partition: partition
+      return_entity: return_entity
     } = query
 
-    entities =
-      case partition do
-        # If no required component, we must get all Entities
-        :any -> all_keys(Entity)
-        # If a partition is specified, get by partition
-        _ -> index_read(Entity, partition, :partition)
-      end
+    component_selectors = Enum.map(components, &compile_component_selector/1)
 
-    entities
+    Entity
+    |> index_read(partition, :partition)
+    |> Enum.map(&build_entity_struct(&1))
+    |> Enum.map(&fetch_partition_components(&1, component_selectors))
+    |> Enum.filter(&matches_partition_query?(&1, mandatories, return_entity))
+    |> maybe_preload_all(preload_all)
+    |> apply_return_type(return_type)
+  end
+
+  def all(%Query{return_entity: true, mandatories: [], partition: :any} = query) do
+    %Query{
+      return_type: return_type,
+      components: components,
+      preload_all: preload_all
+    } = query
+
+    Entity
+    |> all_keys()
     # Transform to Entity struct
     |> Enum.map(&build_entity_struct(&1))
     # Fetch needed components
@@ -98,12 +114,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   # return_type can be `Entity`, a Component module or a tuple here
-  def all(%Query{return_type: return_type} = query) do
+  def all(%Query{return_type: return_type, partition: :any} = query) do
     %Query{
       components: components,
       mandatories: mandatories,
-      preload_all: preload_all,
-      partition: partition
+      preload_all: preload_all
     } = query
 
     components
@@ -113,8 +128,6 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.group_by(&component(&1, :owner_id), &component(&1, :component))
     # Keep only all required component matching
     |> Enum.filter(&has_all_components(&1, mandatories))
-    # Filter by partition
-    |> maybe_filter_by_partition(partition)
     # Transform to Entity struct
     |> Enum.map(fn {id, compons} -> {build_entity_struct(id), compons} end)
     # Maybe preload all
@@ -658,22 +671,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     mandatories -- component_modules == []
   end
 
-  defp maybe_filter_by_partition(entities, :any), do: entities
+  defp matches_partition_query?({_entity, []}, [], false), do: false
 
-  defp maybe_filter_by_partition(entities, partition) do
-    Enum.filter(entities, fn {entity_id, _components} ->
-      case read({Entity, entity_id}) do
-        [record] ->
-          record
-          # Get the partition
-          |> entity(:partition)
-          # Check if child.partition == partition
-          |> Kernel.==(partition)
-
-        [] ->
-          false
-      end
-    end)
+  defp matches_partition_query?(entity_components, mandatories, _return_entity) do
+    has_all_components(entity_components, mandatories)
   end
 
   defp maybe_preload_all(entities, true) do
@@ -689,6 +690,38 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp fetch_needed_components(entity, components, _preload_all) do
     entity_components = Enum.flat_map(components, &(entity |> fetch_components(&1) |> unwrap()))
     {entity, entity_components}
+  end
+
+  defp compile_component_selector(component_mod) when is_atom(component_mod),
+    do: {component_mod, nil}
+
+  defp compile_component_selector({component_mod, []}), do: {component_mod, nil}
+
+  defp compile_component_selector({component_mod, filters}) do
+    guards = Enum.map(filters, &component_value_guard/1)
+    match_spec = :ets.match_spec_compile([{:"$1", guards, [:"$_"]}])
+    {component_mod, match_spec}
+  end
+
+  defp fetch_partition_components(entity, component_selectors)
+       when is_list(component_selectors) do
+    components = Enum.flat_map(component_selectors, &fetch_partition_components(entity, &1))
+    {entity, components}
+  end
+
+  defp fetch_partition_components(entity, {component_mod, match_spec}) do
+    {:ok, components} = fetch_components(entity, component_mod)
+    filter_component_values(components, match_spec)
+  end
+
+  defp filter_component_values(components, nil), do: components
+
+  defp filter_component_values(components, match_spec) do
+    :ets.match_spec_run(components, match_spec)
+  end
+
+  defp component_value_guard({op, field, value}) do
+    {op, {:map_get, field, :"$1"}, escape_match_spec_constant(value)}
   end
 
   defp apply_return_type(tuples, Entity) do

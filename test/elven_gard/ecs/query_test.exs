@@ -185,6 +185,124 @@ defmodule ElvenGard.ECS.QueryTest do
       assert Query.all(query) == [%PositionComponent{map_id: map_ref}]
     end
 
+    test "partitioned queries preserve filters, preloads and tuple returns" do
+      partition = make_ref()
+      outside_partition = make_ref()
+      map_id = {:map, make_ref()}
+
+      matching_entity =
+        spawn_entity(
+          partition: partition,
+          components: [
+            {PlayerComponent, name: "Matching"},
+            {PositionComponent, map_id: map_id},
+            {BuffComponent, buff_id: 42},
+            {BuffComponent, buff_id: 1337}
+          ]
+        )
+
+      filtered_entity =
+        spawn_entity(
+          partition: partition,
+          components: [
+            {PlayerComponent, name: "Filtered"},
+            {PositionComponent, map_id: map_id}
+          ]
+        )
+
+      _missing_required_component =
+        spawn_entity(
+          partition: partition,
+          components: [{PositionComponent, map_id: map_id}]
+        )
+
+      _componentless_entity = spawn_entity(partition: partition)
+
+      _outside_entity =
+        spawn_entity(
+          partition: outside_partition,
+          components: [
+            {PlayerComponent, name: "Matching"},
+            {PositionComponent, map_id: map_id},
+            {BuffComponent, buff_id: 42}
+          ]
+        )
+
+      filtered_query =
+        Query.select(Entity,
+          with: [{PlayerComponent, [{:==, :name, "Matching"}]}],
+          preload: [BuffComponent],
+          partition: partition
+        )
+
+      assert [{^matching_entity, filtered_components}] = Query.all(filtered_query)
+      assert %PlayerComponent{name: "Matching"} in filtered_components
+      assert %BuffComponent{buff_id: 42} in filtered_components
+      assert %BuffComponent{buff_id: 1337} in filtered_components
+      refute Enum.any?(filtered_components, &match?(%PositionComponent{}, &1))
+
+      tuple_value_filter_query =
+        Query.select(PositionComponent,
+          with: [{PositionComponent, [{:==, :map_id, map_id}]}],
+          partition: partition
+        )
+
+      assert length(Query.all(tuple_value_filter_query)) == 3
+
+      repeated_component_filter_query =
+        Query.select(BuffComponent,
+          with: [{BuffComponent, [{:==, :buff_id, 1337}]}],
+          partition: partition
+        )
+
+      assert Query.all(repeated_component_filter_query) == [%BuffComponent{buff_id: 1337}]
+
+      tuple_query =
+        Query.select({Entity, PlayerComponent, PositionComponent},
+          with: [PlayerComponent],
+          partition: partition
+        )
+
+      tuple_results = Query.all(tuple_query)
+
+      assert Enum.any?(
+               tuple_results,
+               &match?(
+                 {^matching_entity, %PlayerComponent{name: "Matching"},
+                  %PositionComponent{map_id: ^map_id}},
+                 &1
+               )
+             )
+
+      assert Enum.any?(
+               tuple_results,
+               &match?(
+                 {^filtered_entity, %PlayerComponent{name: "Filtered"},
+                  %PositionComponent{map_id: ^map_id}},
+                 &1
+               )
+             )
+
+      assert length(tuple_results) == 2
+
+      optional_tuple_query =
+        Query.select({PlayerComponent, BuffComponent}, partition: partition)
+
+      optional_tuple_results = Query.all(optional_tuple_query)
+      refute {nil, nil} in optional_tuple_results
+      assert length(optional_tuple_results) == 2
+
+      preload_all_query =
+        Query.select(Entity,
+          with: [{PlayerComponent, [{:==, :name, "Matching"}]}],
+          preload: :all,
+          partition: partition
+        )
+
+      assert [{^matching_entity, all_components}] = Query.all(preload_all_query)
+      assert length(all_components) == 4
+    end
+
     test "Components + with" do
       ref1 = make_ref()
       ref2 = make_ref()
