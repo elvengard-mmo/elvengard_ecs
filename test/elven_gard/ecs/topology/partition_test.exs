@@ -29,6 +29,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       args = [
         event_source: Keyword.fetch!(opts, :event_source),
         systems: Keyword.get(opts, :systems, []),
+        shutdown_systems: Keyword.get(opts, :shutdown_systems, []),
         interval: Keyword.get(opts, :interval, 1),
         concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
       ]
@@ -111,6 +112,24 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
         1 -> :ok
         2 -> raise "system failed"
       end
+    end
+  end
+
+  defmodule ShutdownSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    @impl true
+    def run(%{partition: test_pid, delta: :shutdown, reason: reason}) do
+      send(test_pid, {:shutdown_system_run, __MODULE__, reason})
+    end
+  end
+
+  defmodule FailingShutdownSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    @impl true
+    def run(%{delta: :shutdown}) do
+      raise "shutdown failed"
     end
   end
 
@@ -216,6 +235,83 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert log =~ "1 systems killed/crashed"
   end
 
+  test "runs shutdown systems with the partition and stop reason", %{source: source} do
+    child_id = make_ref()
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:elvengard_ecs, :shutdown_system_run, :stop],
+          [:elvengard_ecs, :partition_shutdown]
+        ],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [],
+         shutdown_systems: [ShutdownSystem],
+         interval: 60_000},
+        id: child_id
+      )
+
+    assert Partition.started?(partition)
+    assert :ok = stop_supervised(child_id)
+    assert_receive {:shutdown_system_run, ShutdownSystem, :shutdown}
+
+    assert_receive {:telemetry, [:elvengard_ecs, :shutdown_system_run, :stop],
+                    %{duration: system_duration},
+                    %{partition: test_pid, reason: :shutdown, system: ShutdownSystem}}
+
+    assert test_pid == self()
+    assert system_duration >= 0
+
+    assert_receive {:telemetry, [:elvengard_ecs, :partition_shutdown],
+                    %{duration: partition_duration},
+                    %{
+                      id: test_pid,
+                      reason: :shutdown,
+                      shutdown_systems: [ShutdownSystem]
+                    }}
+
+    assert test_pid == self()
+    assert partition_duration >= 0
+  end
+
+  test "continues shutdown after one system fails and logs the failure", %{source: source} do
+    child_id = make_ref()
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [],
+         shutdown_systems: [FailingShutdownSystem, ShutdownSystem],
+         interval: 60_000},
+        id: child_id
+      )
+
+    assert Partition.started?(partition)
+
+    log =
+      capture_log(fn ->
+        assert :ok = stop_supervised(child_id)
+        assert_receive {:shutdown_system_run, ShutdownSystem, :shutdown}
+      end)
+
+    assert log =~ "shutdown system failed"
+    assert log =~ inspect(FailingShutdownSystem)
+  end
+
   # test "aa", %{source: source} do
   #   systems = [WithoutEventsSystem, WithEventsSystem, WithoutEventsSystem]
   #   start_supervised!({TestPartition, id: :default, event_source: source, systems: systems})
@@ -233,4 +329,10 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
 
   #   Process.sleep(2000)
   # end
+
+  ## Test helpers
+
+  def handle_telemetry(event, measurements, metadata, test_pid) do
+    send(test_pid, {:telemetry, event, measurements, metadata})
+  end
 end

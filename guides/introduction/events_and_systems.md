@@ -67,6 +67,7 @@ defmodule MyGame.WorldPartition do
     {id,
      systems: [MyGame.Systems.Movement],
      startup_systems: [MyGame.Systems.LoadWorld],
+     shutdown_systems: [MyGame.Systems.UnloadWorld],
      interval: Keyword.get(opts, :interval, 50),
      concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())}
   end
@@ -76,6 +77,8 @@ end
 The `:systems` option is required. Other options are:
 
   * `:startup_systems` - systems run once before event subscription;
+  * `:shutdown_systems` - systems run sequentially when the partition stops
+    gracefully;
   * `:interval` - milliseconds between scheduled ticks; use `0` to run without
     an intentional delay;
   * `:concurrency` - maximum systems running in one batch;
@@ -84,6 +87,26 @@ The `:systems` option is required. Other options are:
 
 A regular system crash or timeout is logged and does not prevent later batches
 from running. A startup-system failure stops partition startup.
+
+Shutdown systems receive the partition, the `:shutdown` lifecycle delta, and
+the stop reason:
+
+```elixir
+defmodule MyGame.Systems.UnloadWorld do
+  use ElvenGard.ECS.System, lock_components: :sync
+
+  @impl true
+  def run(%{partition: partition, delta: :shutdown, reason: reason}) do
+    MyGame.delete_partition_entities(partition)
+    {partition, reason}
+  end
+end
+```
+
+Each shutdown system is isolated: a failure is logged and the remaining
+shutdown systems still run. Shutdown hooks are best-effort lifecycle hooks.
+They run for graceful GenServer and supervisor shutdowns, but cannot run after
+an untrappable `:kill` exit or a VM crash.
 
 ## Supervise the topology
 
@@ -134,10 +157,12 @@ warning when older events are dropped.
 Partitions emit these telemetry events:
 
   * `[:elvengard_ecs, :startup_system_run, :start | :stop | :exception]`
+  * `[:elvengard_ecs, :shutdown_system_run, :start | :stop | :exception]`
   * `[:elvengard_ecs, :system_run, :start | :stop | :exception]`
   * `[:elvengard_ecs, :partition_init]`
+  * `[:elvengard_ecs, :partition_shutdown]`
 
 System metadata includes the partition and system module. Event-driven runs
 also include the event. The partition initialization event reports its duration
-and startup metadata.
-
+and startup metadata. Shutdown metadata includes the stop reason and configured
+shutdown systems.

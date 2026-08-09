@@ -3,7 +3,9 @@ defmodule ElvenGard.ECS.System do
   Behaviour for logic executed by an `ElvenGard.ECS.Topology.Partition`.
 
   A system may run every tick through `run/1`, react to selected event modules
-  through `run/2`, or implement both callbacks:
+  through `run/2`, or implement both callbacks. Partition startup and shutdown
+  systems also use `run/1`; their context delta is respectively `:startup` or
+  `:shutdown`, and shutdown contexts include the stop reason:
 
       defmodule MyGame.MovementSystem do
         use ElvenGard.ECS.System,
@@ -24,11 +26,15 @@ defmodule ElvenGard.ECS.System do
 
   ## Behaviour
 
-  @typedoc "Elapsed milliseconds for a regular tick, or `:startup`."
-  @type delta :: non_neg_integer() | :startup
+  @typedoc "Elapsed milliseconds for a regular tick, or a lifecycle phase."
+  @type delta :: non_neg_integer() | :startup | :shutdown
 
   @typedoc "Context passed to every system callback."
-  @type context :: %{partition: any(), delta: delta()}
+  @type context :: %{
+          optional(:reason) => any(),
+          partition: any(),
+          delta: delta()
+        }
 
   @doc "Runs once per partition tick when implemented."
   @callback run(context :: context()) :: any()

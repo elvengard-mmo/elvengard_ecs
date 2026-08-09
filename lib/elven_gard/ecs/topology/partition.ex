@@ -15,6 +15,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
           {id,
            systems: [MyGame.MovementSystem],
            startup_systems: [MyGame.LoadWorldSystem],
+           shutdown_systems: [MyGame.UnloadWorldSystem],
            interval: 50}
         end
       end
@@ -27,6 +28,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
     * `:systems` - required list of regular systems
     * `:startup_systems` - systems executed once before event subscription
+    * `:shutdown_systems` - systems executed sequentially when the partition
+      terminates gracefully
     * `:interval` - milliseconds between scheduled ticks; `0` runs without an
       intentional delay
     * `:concurrency` - maximum concurrent systems; defaults to the number of
@@ -36,8 +39,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   Partitions emit `:telemetry` spans under
   `[:elvengard_ecs, :startup_system_run]` and
-  `[:elvengard_ecs, :system_run]`, plus a
-  `[:elvengard_ecs, :partition_init]` event after startup systems complete.
+  `[:elvengard_ecs, :shutdown_system_run]` and
+  `[:elvengard_ecs, :system_run]`, plus `[:elvengard_ecs, :partition_init]`
+  and `[:elvengard_ecs, :partition_shutdown]` lifecycle events.
 
   """
 
@@ -97,10 +101,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def init({mod, opts}) do
+    Process.flag(:trap_exit, true)
+
     {id, specs} = mod.setup(opts)
 
     systems = specs[:systems] || raise ArgumentError, ":systems is required"
     startup_systems = Keyword.get(specs, :startup_systems, [])
+    shutdown_systems = Keyword.get(specs, :shutdown_systems, [])
     interval = Keyword.get(specs, :interval, 1_000)
     concurrency = Keyword.get(specs, :concurrency, System.schedulers_online())
     source = Keyword.get(specs, :event_source, EventSource.name())
@@ -113,6 +120,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       next_tick: tick,
       interval: interval,
       startup_systems: startup_systems,
+      shutdown_systems: shutdown_systems,
       systems: systems,
       concurrency: concurrency,
       source: source,
@@ -189,6 +197,21 @@ defmodule ElvenGard.ECS.Topology.Partition do
     {:reply, started, state}
   end
 
+  @impl true
+  def terminate(reason, state) do
+    %{id: id, shutdown_systems: shutdown_systems} = state
+    start_time = System.monotonic_time()
+    context = build_shutdown_context(id, reason)
+
+    Enum.each(shutdown_systems, &run_shutdown_system(&1, context))
+
+    measurements = %{duration: System.monotonic_time() - start_time}
+    metadata = %{id: id, reason: reason, shutdown_systems: shutdown_systems}
+    :telemetry.execute([:elvengard_ecs, :partition_shutdown], measurements, metadata)
+
+    :ok
+  end
+
   ## Internal use ONLY
 
   @doc false
@@ -214,6 +237,34 @@ defmodule ElvenGard.ECS.Topology.Partition do
   defp now(), do: System.monotonic_time(:millisecond)
 
   defp build_context(partition, delta), do: %{partition: partition, delta: delta}
+
+  defp build_shutdown_context(partition, reason) do
+    %{partition: partition, delta: :shutdown, reason: reason}
+  end
+
+  defp run_shutdown_system(module, context) do
+    metadata = %{
+      partition: context.partition,
+      reason: context.reason,
+      system: module
+    }
+
+    :telemetry.span(
+      [:elvengard_ecs, :shutdown_system_run],
+      metadata,
+      fn -> {module.run(context), metadata} end
+    )
+  catch
+    kind, payload ->
+      exception = Exception.format(kind, payload, __STACKTRACE__)
+
+      Logger.error(
+        "shutdown system failed system=#{inspect(module)} " <>
+          "partition=#{inspect(context.partition)} reason=#{inspect(context.reason)}:\n#{exception}"
+      )
+
+      :error
+  end
 
   defp schedule_next_tick(state) do
     %{next_tick: next_tick, interval: interval} = state
