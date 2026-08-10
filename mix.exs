@@ -95,6 +95,7 @@ defmodule ElvenGard.ECS.MixProject do
         ElvenGard.ECS.Entity,
         ElvenGard.ECS.Component,
         ElvenGard.ECS.Bundle,
+        ElvenGard.ECS.ChangeSet,
         ElvenGard.ECS.Command,
         ElvenGard.ECS.Multi,
         ElvenGard.ECS.Query

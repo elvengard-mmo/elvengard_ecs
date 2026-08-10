@@ -67,6 +67,19 @@ so far. The first `{:error, reason}` rolls every ECS write back. A `run/3`
 callback must not perform an irreversible external side effect because the
 backend cannot roll that effect back.
 
+Replication systems can request the committed mutations alongside the named
+results:
+
+```elixir
+{:ok, results, change_set} = Command.transact_with_changes(multi)
+changes = ElvenGard.ECS.ChangeSet.to_list(change_set)
+```
+
+The change set contains only declared ECS commands from this transaction.
+`run/3` and `put/3` are excluded. It is returned as an ordinary immutable value
+and is never retained by the ECS, so later ticks cannot grow an implicit
+history.
+
 ## Spawning entities atomically
 
 `Command.spawn_entity/1` creates the entity, attaches its children, and inserts

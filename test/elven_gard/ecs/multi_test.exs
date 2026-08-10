@@ -1,7 +1,7 @@
 defmodule ElvenGard.ECS.MultiTest do
   use ElvenGard.ECS.EntityCase, async: true
 
-  alias ElvenGard.ECS.{Command, Entity, Multi, Query}
+  alias ElvenGard.ECS.{ChangeSet, Command, Entity, Multi, Query}
   alias ElvenGard.ECS.Components.{BuffComponent, PositionComponent}
 
   ## Building multis
@@ -135,5 +135,38 @@ defmodule ElvenGard.ECS.MultiTest do
               position: %PositionComponent{pos_x: 9},
               loaded: %PositionComponent{pos_x: 9}
             }} = Command.transact(multi)
+  end
+
+  test "returns a bounded changeset only for the current multi" do
+    first_entity = spawn_entity()
+    second_entity = spawn_entity()
+
+    first_multi =
+      Multi.new()
+      |> Multi.add_component(:position, first_entity, {PositionComponent, pos_x: 4})
+      |> Multi.set_partition(:partition, first_entity, :arena)
+
+    assert {:ok, first_results, first_changes} = Command.transact_with_changes(first_multi)
+    assert first_results.position == %PositionComponent{pos_x: 4}
+    refute ChangeSet.empty?(first_changes)
+
+    assert ChangeSet.to_list(first_changes) == [
+             {:position, {:add_component, first_entity, %PositionComponent{pos_x: 4}}},
+             {:partition, {:set_partition, first_entity, :arena}}
+           ]
+
+    second_multi =
+      Multi.new()
+      |> Multi.add_component(:buff, second_entity, {BuffComponent, buff_id: 7})
+
+    assert {:ok, _second_results, second_changes} =
+             Command.transact_with_changes(second_multi)
+
+    assert ChangeSet.to_list(second_changes) == [
+             {:buff, {:add_component, second_entity, %BuffComponent{buff_id: 7}}}
+           ]
+
+    assert length(ChangeSet.to_list(first_changes)) == 2
+    assert ChangeSet.empty?(ChangeSet.new())
   end
 end
