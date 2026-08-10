@@ -18,6 +18,10 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   A local or custom event source can be started with `name: name` and passed to
   each partition through its `:event_source` option.
+
+  Dispatch emits `[:elvengard_ecs, :event_dispatch]` spans without event
+  payloads. Buffer overflow emits `[:elvengard_ecs, :event_drop]` with the
+  dropped count, partition, and configured buffer limit.
   """
 
   use GenServer
@@ -90,7 +94,18 @@ defmodule ElvenGard.ECS.Topology.EventSource do
           | {:error, {:partition_down, [any()]}}
           | {:error, {:systems_failed, %{optional(any()) => [module()]}}}
   def dispatch_and_wait(name \\ name(), events, timeout \\ 5_000) do
-    GenServer.call(name, {:dispatch_and_wait, events, timeout}, :infinity)
+    {metadata, partition_count} = event_dispatch_metadata(events, :awaited)
+
+    :telemetry.span([:elvengard_ecs, :event_dispatch], metadata, fn ->
+      result = GenServer.call(name, {:dispatch_and_wait, events, timeout}, :infinity)
+
+      measurements = %{
+        event_count: length(events),
+        partition_count: partition_count
+      }
+
+      {result, measurements, Map.put(metadata, :outcome, dispatch_outcome(result))}
+    end)
   end
 
   @doc false
@@ -174,11 +189,20 @@ defmodule ElvenGard.ECS.Topology.EventSource do
   end
 
   def handle_cast({:dispatch, events}, state) do
+    grouped_events = events |> Enum.group_by(& &1.partition, & &1) |> Enum.to_list()
+    metadata = dispatch_metadata(:async, Enum.map(grouped_events, &elem(&1, 0)))
+
     discarded =
-      events
-      |> Enum.group_by(& &1.partition, & &1)
-      |> Enum.to_list()
-      |> dispatch_events(state.partitions, state.discarded)
+      :telemetry.span([:elvengard_ecs, :event_dispatch], metadata, fn ->
+        discarded = dispatch_events(grouped_events, state.partitions, state.discarded)
+
+        measurements = %{
+          event_count: length(events),
+          partition_count: length(grouped_events)
+        }
+
+        {discarded, measurements, Map.put(metadata, :outcome, :ok)}
+      end)
 
     {:noreply, %{state | discarded: discarded}}
   end
@@ -247,6 +271,28 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   defp maybe_send(_pid, []), do: :ok
   defp maybe_send(pid, events), do: GenServer.cast(pid, {:events, events})
+
+  defp event_dispatch_metadata(events, mode) do
+    partitions = events |> Enum.map(& &1.partition) |> Enum.uniq()
+    {dispatch_metadata(mode, partitions), length(partitions)}
+  end
+
+  defp dispatch_metadata(mode, partitions) do
+    partition =
+      case partitions do
+        [partition] -> partition
+        [] -> nil
+        _partitions -> :multiple
+      end
+
+    %{mode: mode, partition: partition}
+  end
+
+  defp dispatch_outcome(:ok), do: :ok
+  defp dispatch_outcome({:error, :timeout}), do: :timeout
+  defp dispatch_outcome({:error, {:partition_unavailable, _partitions}}), do: :unavailable
+  defp dispatch_outcome({:error, {:partition_down, _partitions}}), do: :partition_down
+  defp dispatch_outcome({:error, {:systems_failed, _failures}}), do: :systems_failed
 
   defp dispatch_tracked_events(grouped_events, partitions, receipt) do
     Enum.each(grouped_events, fn {partition, events} ->
@@ -406,6 +452,12 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
       count ->
         Logger.warning("dropped #{count} buffered events for partition #{inspect(partition)}")
+
+        :telemetry.execute(
+          [:elvengard_ecs, :event_drop],
+          %{event_count: count},
+          %{partition: partition, buffer_limit: @buffer_limit}
+        )
     end
 
     {queue, min(total_event_count, @buffer_limit)}

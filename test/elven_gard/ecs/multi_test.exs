@@ -37,6 +37,68 @@ defmodule ElvenGard.ECS.MultiTest do
 
   ## Transactions
 
+  test "emits bounded multi telemetry with numeric measurements" do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:elvengard_ecs, :multi, :stop],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    multi =
+      Multi.new()
+      |> Multi.put(:one, 1)
+      |> Multi.put(:two, 2)
+      |> Multi.merge(fn _changes -> Multi.new() |> Multi.put(:three, 3) end)
+
+    assert {:ok, %{one: 1, two: 2, three: 3}, changes} =
+             Command.transact_with_changes(multi)
+
+    assert ChangeSet.empty?(changes)
+
+    assert_receive {:telemetry, %{duration: duration, operation_count: 3, change_count: 0},
+                    metadata}
+
+    assert duration >= 0
+    assert metadata.backend == ElvenGard.ECS.MnesiaBackend
+    assert metadata.outcome == :ok
+    assert metadata.tracks_changes
+    refute Map.has_key?(metadata, :multi)
+    refute Map.has_key?(metadata, :changes)
+  end
+
+  test "reports failed multi outcomes without failure payloads" do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:elvengard_ecs, :multi, :stop],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    multi = Multi.new() |> Multi.put(:seed, 1) |> Multi.error(:validation, :private_reason)
+
+    assert Command.transact(multi) ==
+             {:error, :validation, :private_reason, %{seed: 1}}
+
+    assert_receive {:telemetry, %{duration: duration, operation_count: 2, change_count: 0},
+                    metadata}
+
+    assert duration >= 0
+    assert metadata.outcome == :error
+    refute Map.has_key?(metadata, :reason)
+    refute Map.has_key?(metadata, :failed_operation)
+  end
+
   test "executes dependent entity and component commands atomically" do
     partition = make_ref()
     entity_id = {:multi_entity, make_ref()}
@@ -168,5 +230,12 @@ defmodule ElvenGard.ECS.MultiTest do
 
     assert length(ChangeSet.to_list(first_changes)) == 2
     assert ChangeSet.empty?(ChangeSet.new())
+  end
+
+  ## Telemetry callback
+
+  @doc false
+  def handle_telemetry(_event, measurements, metadata, test_pid) do
+    send(test_pid, {:telemetry, measurements, metadata})
   end
 end

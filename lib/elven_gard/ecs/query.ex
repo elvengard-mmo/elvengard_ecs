@@ -7,6 +7,9 @@ defmodule ElvenGard.ECS.Query do
   lookups for an entity and its components.
 
   Reads are delegated to the backend configured under `:elvengard_ecs`.
+  Executing `all/1` or `all/2` emits a `[:elvengard_ecs, :query]` telemetry
+  span with query shape metadata and a numeric result count, never result or
+  component payloads.
   """
 
   alias __MODULE__
@@ -121,13 +124,13 @@ defmodule ElvenGard.ECS.Query do
   @doc "Executes a query and returns all matching results."
   @spec all(Query.t()) :: [result()]
   def all(%Query{} = query) do
-    Config.backend().all(query)
+    execute_all(query, nil)
   end
 
   @doc "Executes a tuple query and materializes every result into `bundle_module`."
   @spec all(Query.t(), into: module()) :: [bundle_result()]
   def all(%Query{} = query, into: bundle_module) when is_atom(bundle_module) do
-    results = Config.backend().all(query)
+    results = execute_all(query, bundle_module)
     Bundle.load_many(bundle_module, query.return_type, results)
   end
 
@@ -254,6 +257,26 @@ defmodule ElvenGard.ECS.Query do
   end
 
   ## Private function
+
+  defp execute_all(query, bundle_module) do
+    backend = Config.backend()
+
+    metadata = %{
+      backend: backend,
+      operation: :all,
+      partition: query.partition,
+      return_type: query.return_type,
+      component_modules: Enum.map(query.components, &component_module/1),
+      mandatory_component_modules: query.mandatories,
+      preload_all: query.preload_all,
+      into: bundle_module
+    }
+
+    :telemetry.span([:elvengard_ecs, :query], metadata, fn ->
+      results = backend.all(query)
+      {results, %{result_count: length(results)}, metadata}
+    end)
+  end
 
   defp one_result(results) do
     case results do

@@ -4,7 +4,9 @@ defmodule ElvenGard.ECS.Command do
 
   Commands delegate to the configured backend. Compound operations such as
   spawning and despawning entities run in a transaction so failures roll back
-  the complete operation.
+  the complete operation. Multi execution emits a
+  `[:elvengard_ecs, :multi]` telemetry span containing only operation and
+  change counts plus bounded outcome metadata.
   """
 
   alias ElvenGard.ECS.{ChangeSet, Component, Config, Entity, Multi, Query}
@@ -33,7 +35,7 @@ defmodule ElvenGard.ECS.Command do
   """
   @spec transact(Multi.t()) :: {:ok, Multi.changes()} | Multi.failure() | {:error, any()}
   def transact(%Multi{} = multi) do
-    do_transact_multi(multi, nil)
+    telemetry_transact(multi, nil)
   end
 
   @doc """
@@ -46,7 +48,7 @@ defmodule ElvenGard.ECS.Command do
   @spec transact_with_changes(Multi.t()) ::
           {:ok, Multi.changes(), ChangeSet.t()} | Multi.failure() | {:error, any()}
   def transact_with_changes(%Multi{} = multi) do
-    do_transact_multi(multi, ChangeSet.new())
+    telemetry_transact(multi, ChangeSet.new())
   end
 
   @doc "Aborts the current backend transaction with `reason`."
@@ -167,52 +169,104 @@ defmodule ElvenGard.ECS.Command do
 
   ## Private function
 
+  defp telemetry_transact(multi, change_set) do
+    metadata = %{
+      backend: Config.backend(),
+      tracks_changes: not is_nil(change_set)
+    }
+
+    :telemetry.span([:elvengard_ecs, :multi], metadata, fn ->
+      {result, operation_count} = do_transact_multi(multi, change_set)
+
+      measurements = %{
+        operation_count: operation_count,
+        change_count: multi_change_count(result)
+      }
+
+      {result, measurements, Map.put(metadata, :outcome, multi_outcome(result))}
+    end)
+  end
+
+  defp multi_change_count({:ok, _changes, change_set}) do
+    change_set |> ChangeSet.to_list() |> length()
+  end
+
+  defp multi_change_count(_result), do: 0
+
+  defp multi_outcome({:ok, _changes}), do: :ok
+  defp multi_outcome({:ok, _changes, _change_set}), do: :ok
+  defp multi_outcome({:error, _reason}), do: :error
+  defp multi_outcome({:error, _name, _reason, _changes}), do: :error
+
   defp do_transact_multi(multi, change_set) do
     result = fn ->
-      {changes, _names, change_set} =
+      {changes, _names, change_set, operation_count} =
         multi
         |> Multi.to_list()
-        |> execute_multi(%{}, Multi.__names__(multi), change_set)
+        |> execute_multi(%{}, Multi.__names__(multi), change_set, 0)
 
-      {changes, change_set}
+      {changes, change_set, operation_count}
     end
 
     case transaction(result) do
-      {:ok, {changes, nil}} -> {:ok, changes}
-      {:ok, {changes, change_set}} -> {:ok, changes, change_set}
-      {:error, {@multi_failure, name, reason, changes}} -> {:error, name, reason, changes}
-      {:error, reason} -> {:error, reason}
+      {:ok, {changes, nil, operation_count}} ->
+        {{:ok, changes}, operation_count}
+
+      {:ok, {changes, change_set, operation_count}} ->
+        {{:ok, changes, change_set}, operation_count}
+
+      {:error, {@multi_failure, name, reason, changes, operation_count}} ->
+        {{:error, name, reason, changes}, operation_count}
+
+      {:error, reason} ->
+        {{:error, reason}, 0}
     end
   end
 
-  defp execute_multi([], changes, names, change_set), do: {changes, names, change_set}
+  defp execute_multi([], changes, names, change_set, operation_count) do
+    {changes, names, change_set, operation_count}
+  end
 
   defp execute_multi(
          [{:merge, {:merge, function}} | operations],
          changes,
          names,
-         change_set
+         change_set,
+         operation_count
        ) do
     nested_multi = function.(changes)
     nested_names = Multi.__names__(nested_multi)
     ensure_unique_multi_names!(names, nested_names)
 
-    {changes, names, change_set} =
+    {changes, names, change_set, operation_count} =
       nested_multi
       |> Multi.to_list()
-      |> execute_multi(changes, MapSet.union(names, nested_names), change_set)
+      |> execute_multi(changes, MapSet.union(names, nested_names), change_set, operation_count)
 
-    execute_multi(operations, changes, names, change_set)
+    execute_multi(operations, changes, names, change_set, operation_count)
   end
 
-  defp execute_multi([{name, operation} | operations], changes, names, change_set) do
+  defp execute_multi(
+         [{name, operation} | operations],
+         changes,
+         names,
+         change_set,
+         operation_count
+       ) do
     case execute_multi_operation(operation, changes) do
       {:ok, value, change} ->
         change_set = maybe_track_change(change_set, name, change)
-        execute_multi(operations, Map.put(changes, name, value), names, change_set)
+
+        execute_multi(
+          operations,
+          Map.put(changes, name, value),
+          names,
+          change_set,
+          operation_count + 1
+        )
 
       {:error, reason} ->
-        abort({@multi_failure, name, reason, changes})
+        abort({@multi_failure, name, reason, changes, operation_count + 1})
 
       value ->
         raise ArgumentError,

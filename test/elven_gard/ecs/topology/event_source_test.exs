@@ -65,7 +65,47 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
     assert_receive {:"$gen_cast", {:events, ^events}}
   end
 
+  test "emits bounded asynchronous dispatch telemetry", %{source: source} do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:elvengard_ecs, :event_dispatch, :stop],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    :ok = EventSource.subscribe(source, partition: :odd)
+    events = Enum.map([1, 3], &OddEvenEvent.new/1)
+
+    :ok = EventSource.dispatch(source, events)
+    assert_receive {:"$gen_cast", {:events, ^events}}
+
+    assert_receive {:telemetry, %{duration: duration, event_count: 2, partition_count: 1},
+                    metadata}
+
+    assert duration >= 0
+    assert metadata.mode == :async
+    assert metadata.partition == :odd
+    refute Map.has_key?(metadata, :events)
+  end
+
   test "waits for tracked dispatch acknowledgements", %{source: source} do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:elvengard_ecs, :event_dispatch, :stop],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     :ok = EventSource.subscribe(source, partition: :odd)
     events = Enum.map([1, 3], &OddEvenEvent.new/1)
     dispatch = Task.async(fn -> EventSource.dispatch_and_wait(source, events, 1_000) end)
@@ -74,6 +114,11 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
     :ok = EventSource.ack(source, receipt, :odd, [])
 
     assert Task.await(dispatch) == :ok
+
+    assert_receive {:telemetry, %{duration: duration, event_count: 2, partition_count: 1},
+                    %{mode: :awaited, outcome: :ok, partition: :odd}}
+
+    assert duration >= 0
   end
 
   test "returns an error when an awaited partition is unavailable", %{source: source} do
@@ -107,6 +152,18 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
   end
 
   test "keeps the latest 10,000 buffered events and logs dropped events", %{source: source} do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:elvengard_ecs, :event_drop],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     events = Enum.map(1..10_005, &OddEvenEvent.new(&1 * 2 - 1))
     {initial_events, overflow_events} = Enum.split(events, 9_998)
 
@@ -123,6 +180,8 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
       end)
 
     assert log =~ "dropped 5 buffered events for partition :odd"
+
+    assert_receive {:telemetry, %{event_count: 5}, %{partition: :odd, buffer_limit: 10_000}}
   end
 
   test "dispatch to multiple partition", %{source: source} do
@@ -192,6 +251,11 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
   end
 
   ## Helpers
+
+  @doc false
+  def handle_telemetry(_event, measurements, metadata, test_pid) do
+    send(test_pid, {:telemetry, measurements, metadata})
+  end
 
   defp partitions(source) do
     %{partitions: partitions} = :sys.get_state(source)

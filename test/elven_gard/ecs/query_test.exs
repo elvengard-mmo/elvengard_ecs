@@ -7,6 +7,34 @@ defmodule ElvenGard.ECS.QueryTest do
   ## General
 
   describe "select/2 + all/1" do
+    test "emits bounded query telemetry without result payloads" do
+      partition = make_ref()
+      entity = spawn_entity(partition: partition)
+      handler_id = make_ref()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:elvengard_ecs, :query, :stop],
+          &__MODULE__.handle_telemetry/4,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      query = Query.select(Entity, partition: partition)
+      assert Query.all(query) == [{entity, []}]
+
+      assert_receive {:telemetry, %{duration: duration, result_count: 1}, metadata}
+      assert duration >= 0
+      assert metadata.backend == ElvenGard.ECS.MnesiaBackend
+      assert metadata.operation == :all
+      assert metadata.partition == partition
+      assert metadata.return_type == Entity
+      refute Map.has_key?(metadata, :query)
+      refute Map.has_key?(metadata, :results)
+    end
+
     test "Entities list all" do
       entity = spawn_entity()
 
@@ -430,6 +458,13 @@ defmodule ElvenGard.ECS.QueryTest do
       assert {entity2, %PlayerComponent{name: "Entity2"}, nil} in result
       assert {entity3, %PlayerComponent{}, %PositionComponent{map_id: ref}} in result
     end
+  end
+
+  ## Telemetry callback
+
+  @doc false
+  def handle_telemetry(_event, measurements, metadata, test_pid) do
+    send(test_pid, {:telemetry, measurements, metadata})
   end
 
   describe "select/2 + one/1" do

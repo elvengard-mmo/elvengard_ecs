@@ -185,15 +185,31 @@ warning when older events are dropped.
 
 ## Telemetry
 
-Partitions emit these telemetry events:
+Timed operations use `:telemetry.span/3`, so each prefix emits `:start`,
+`:stop`, and `:exception` events. Durations use native time units.
 
+The available span prefixes are:
+
+  * `[:elvengard_ecs, :query]`
+  * `[:elvengard_ecs, :multi]`
+  * `[:elvengard_ecs, :event_dispatch]`
+  * `[:elvengard_ecs, :partition_tick]`
+  * `[:elvengard_ecs, :phase_run]`
   * `[:elvengard_ecs, :startup_system_run, :start | :stop | :exception]`
   * `[:elvengard_ecs, :shutdown_system_run, :start | :stop | :exception]`
   * `[:elvengard_ecs, :system_run, :start | :stop | :exception]`
+
+The system prefixes above are listed in expanded form for clarity; attach to
+the corresponding event name. Partitions also emit these single lifecycle and
+counter events:
+
   * `[:elvengard_ecs, :partition_init]`
   * `[:elvengard_ecs, :partition_shutdown]`
+  * `[:elvengard_ecs, :event_drop]`
 
-System metadata includes the partition and system module. Event-driven runs
-also include the event. The partition initialization event reports its duration
-and startup metadata. Shutdown metadata includes the stop reason and configured
-shutdown systems.
+Measurements contain numeric durations and counts such as `:result_count`,
+`:operation_count`, `:change_count`, `:event_count`, `:receipt_count`,
+`:system_run_count`, and `:failure_count`. Metadata identifies structural
+context such as backend, partition, phase, system module, event module, and
+outcome. Raw events, query results, entities, components, multis, and change
+maps are never included.

@@ -310,6 +310,73 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end)
   end
 
+  test "emits tick and phase telemetry without raw event payloads", %{source: source} do
+    handler_id = make_ref()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:elvengard_ecs, :partition_tick, :stop],
+          [:elvengard_ecs, :phase_run, :stop],
+          [:elvengard_ecs, :system_run, :stop]
+        ],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [EventRecordingSystem],
+         interval: 60_000,
+         concurrency: 1}
+      )
+
+    assert Partition.started?(partition)
+    event = %Test1Event{id: 7}
+    GenServer.cast(partition, {:events, [event]})
+    _state = :sys.get_state(partition)
+    send(partition, :tick)
+
+    assert_receive {:event_processed, 7}
+
+    assert_receive {:telemetry, [:elvengard_ecs, :system_run, :stop],
+                    %{duration: system_duration}, system_metadata}
+
+    assert system_duration >= 0
+    assert system_metadata.partition == self()
+    assert system_metadata.phase == :tick
+    assert system_metadata.event_type == Test1Event
+    refute Map.has_key?(system_metadata, :event)
+
+    assert_receive {:telemetry, [:elvengard_ecs, :phase_run, :stop],
+                    %{
+                      duration: phase_duration,
+                      event_count: 1,
+                      failure_count: 0,
+                      system_run_count: 1
+                    }, %{partition: test_pid, phase: :tick, configured_system_count: 1}}
+
+    assert test_pid == self()
+    assert phase_duration >= 0
+
+    assert_receive {:telemetry, [:elvengard_ecs, :partition_tick, :stop],
+                    %{
+                      duration: tick_duration,
+                      event_count: 1,
+                      failure_count: 0,
+                      receipt_count: 0
+                    }, %{partition: test_pid}}
+
+    assert test_pid == self()
+    assert tick_duration >= 0
+  end
+
   test "runs shutdown systems with the partition and stop reason", %{source: source} do
     child_id = make_ref()
     handler_id = make_ref()

@@ -42,12 +42,10 @@ defmodule ElvenGard.ECS.Topology.Partition do
     * `:system_timeout` - timeout for one execution; defaults to `:infinity`
 
   Pre-tick, tick, and post-tick systems are separated by phase barriers. Every
-  callback receives its phase in the system context. Partitions emit
-  `:telemetry` spans under
-  `[:elvengard_ecs, :startup_system_run]` and
-  `[:elvengard_ecs, :shutdown_system_run]` and
-  `[:elvengard_ecs, :system_run]`, plus `[:elvengard_ecs, :partition_init]`
-  and `[:elvengard_ecs, :partition_shutdown]` lifecycle events.
+  callback receives its phase in the system context. Partitions emit bounded
+  telemetry for complete ticks, phases, individual systems, and lifecycle
+  operations. Event-driven system metadata contains the event module, never
+  the event payload.
 
   """
 
@@ -164,7 +162,14 @@ defmodule ElvenGard.ECS.Topology.Partition do
     # Send Telemetry
     duration = System.monotonic_time() - start_time
     measurements = %{duration: duration}
-    metadata = %{id: id, startup_systems: startup_systems, state: state}
+
+    metadata = %{
+      id: id,
+      partition: id,
+      startup_systems: startup_systems,
+      startup_system_count: length(startup_systems)
+    }
+
     :telemetry.execute([:elvengard_ecs, :partition_init], measurements, metadata)
 
     {:noreply, state, {:continue, :subscribe_to_events}}
@@ -179,34 +184,14 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def handle_info(:tick, state) do
-    %{
-      pre_tick_systems: pre_tick_systems,
-      systems: systems,
-      post_tick_systems: post_tick_systems,
-      events: event_batches,
-      receipts: receipts,
-      prev_tick: prev_tick
-    } = state
+    metadata = %{partition: state.id}
 
-    tick = now()
-    delta = tick - prev_tick
+    new_state =
+      :telemetry.span([:elvengard_ecs, :partition_tick], metadata, fn ->
+        {new_state, measurements} = run_tick(state)
+        {new_state, measurements, metadata}
+      end)
 
-    events =
-      case event_batches do
-        [] -> []
-        [events] -> events
-        _ -> event_batches |> :lists.reverse() |> :lists.append()
-      end
-
-    failures =
-      execute_phase(pre_tick_systems, events, state, delta, :pre_tick) ++
-        execute_phase(systems, events, state, delta, :tick) ++
-        execute_phase(post_tick_systems, events, state, delta, :post_tick)
-
-    failed_systems = failures |> Enum.map(&failed_system/1) |> Enum.uniq()
-    acknowledge_receipts(receipts, failed_systems, state.id)
-
-    new_state = %{state | events: [], receipts: [], prev_tick: tick}
     {:noreply, schedule_next_tick(new_state)}
   end
 
@@ -264,6 +249,45 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   ## Private functions
 
+  defp run_tick(state) do
+    %{
+      pre_tick_systems: pre_tick_systems,
+      systems: systems,
+      post_tick_systems: post_tick_systems,
+      events: event_batches,
+      receipts: receipts,
+      prev_tick: prev_tick
+    } = state
+
+    tick = now()
+    delta = tick - prev_tick
+
+    events =
+      case event_batches do
+        [] -> []
+        [events] -> events
+        _ -> event_batches |> :lists.reverse() |> :lists.append()
+      end
+
+    failures =
+      execute_phase(pre_tick_systems, events, state, delta, :pre_tick) ++
+        execute_phase(systems, events, state, delta, :tick) ++
+        execute_phase(post_tick_systems, events, state, delta, :post_tick)
+
+    failed_systems = failures |> Enum.map(&failed_system/1) |> Enum.uniq()
+    acknowledge_receipts(receipts, failed_systems, state.id)
+
+    new_state = %{state | events: [], receipts: [], prev_tick: tick}
+
+    measurements = %{
+      event_count: length(events),
+      failure_count: length(failed_systems),
+      receipt_count: length(receipts)
+    }
+
+    {new_state, measurements}
+  end
+
   defp now(), do: System.monotonic_time(:millisecond)
 
   defp build_context(partition, delta, phase) do
@@ -275,9 +299,25 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   defp execute_phase(systems, events, state, delta, phase) do
-    systems
-    |> Enum.flat_map(&expand_with_events(&1, events))
-    |> batch_and_execute(state, delta, phase)
+    expanded_systems = Enum.flat_map(systems, &expand_with_events(&1, events))
+
+    metadata = %{
+      partition: state.id,
+      phase: phase,
+      configured_system_count: length(systems)
+    }
+
+    :telemetry.span([:elvengard_ecs, :phase_run], metadata, fn ->
+      failures = batch_and_execute(expanded_systems, state, delta, phase)
+
+      measurements = %{
+        event_count: length(events),
+        failure_count: length(failures),
+        system_run_count: length(expanded_systems)
+      }
+
+      {failures, measurements, metadata}
+    end)
   end
 
   defp run_shutdown_system(module, context) do
@@ -368,7 +408,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # System subscribing to events
   defp execute({system, event} = value, delta, partition, phase) do
     context = build_context(partition, delta, phase)
-    metadata = %{partition: partition, system: system, event: event, phase: phase}
+    metadata = %{partition: partition, system: system, event_type: event.__struct__, phase: phase}
 
     # Send Telemetry
     :telemetry.span(
@@ -388,7 +428,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
   # Permanents systems
   defp execute(system, delta, partition, phase) do
     context = build_context(partition, delta, phase)
-    metadata = %{partition: partition, system: system, event: nil, phase: phase}
+    metadata = %{partition: partition, system: system, event_type: nil, phase: phase}
 
     # Send Telemetry
     :telemetry.span(
