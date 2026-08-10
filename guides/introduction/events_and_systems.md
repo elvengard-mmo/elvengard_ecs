@@ -37,10 +37,11 @@ every tick. A system may implement both callbacks.
 The callback context contains:
 
 ```elixir
-%{partition: partition_id, delta: elapsed_milliseconds}
+%{partition: partition_id, delta: elapsed_milliseconds, phase: :tick}
 ```
 
-Startup systems receive `delta: :startup`.
+The phase is one of `:startup`, `:pre_tick`, `:tick`, `:post_tick`, or
+`:shutdown`. Startup systems receive `delta: :startup`.
 
 ## Component locks and concurrency
 
@@ -65,7 +66,9 @@ defmodule MyGame.WorldPartition do
     id = Keyword.fetch!(opts, :id)
 
     {id,
+     pre_tick_systems: [MyGame.Systems.ApplyInput],
      systems: [MyGame.Systems.Movement],
+     post_tick_systems: [MyGame.Systems.Replication],
      startup_systems: [MyGame.Systems.LoadWorld],
      shutdown_systems: [MyGame.Systems.UnloadWorld],
      interval: Keyword.get(opts, :interval, 50),
@@ -77,6 +80,8 @@ end
 The `:systems` option is required. Other options are:
 
   * `:startup_systems` - systems run once before event subscription;
+  * `:pre_tick_systems` - systems run before `:systems` on every tick;
+  * `:post_tick_systems` - systems run after `:systems` on every tick;
   * `:shutdown_systems` - systems run sequentially when the partition stops
     gracefully;
   * `:interval` - milliseconds between scheduled ticks; use `0` to run without
@@ -87,6 +92,14 @@ The `:systems` option is required. Other options are:
 
 A regular system crash or timeout is logged and does not prevent later batches
 from running. A startup-system failure stops partition startup.
+
+Every tick has strict phase barriers:
+
+```text
+pre_tick_systems -> systems -> post_tick_systems
+```
+
+Component locks and concurrency are evaluated independently inside each phase.
 
 Shutdown systems receive the partition, the `:shutdown` lifecycle delta, and
 the stop reason:

@@ -28,7 +28,9 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     def setup(opts) do
       args = [
         event_source: Keyword.fetch!(opts, :event_source),
+        pre_tick_systems: Keyword.get(opts, :pre_tick_systems, []),
         systems: Keyword.get(opts, :systems, []),
+        post_tick_systems: Keyword.get(opts, :post_tick_systems, []),
         shutdown_systems: Keyword.get(opts, :shutdown_systems, []),
         interval: Keyword.get(opts, :interval, 1),
         concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
@@ -184,6 +186,28 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     send(task, :finish)
     assert_receive {:system_started, :sync, ^delta}
     assert delta >= 0
+  end
+
+  test "runs pre-tick, tick and post-tick systems behind phase barriers", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         pre_tick_systems: [ElvenGard.ECS.PhaseRecordingSystem],
+         systems: [ElvenGard.ECS.PhaseRecordingSystem],
+         post_tick_systems: [ElvenGard.ECS.PhaseRecordingSystem],
+         interval: 60_000,
+         concurrency: 3}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    assert_receive {:phase_run, first_phase}
+    assert_receive {:phase_run, second_phase}
+    assert_receive {:phase_run, third_phase}
+    assert [first_phase, second_phase, third_phase] == [:pre_tick, :tick, :post_tick]
   end
 
   test "preserves event order across batches", %{source: source} do

@@ -13,7 +13,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
           id = Keyword.fetch!(opts, :id)
 
           {id,
+           pre_tick_systems: [MyGame.InputSystem],
            systems: [MyGame.MovementSystem],
+           post_tick_systems: [MyGame.ReplicationSystem],
            startup_systems: [MyGame.LoadWorldSystem],
            shutdown_systems: [MyGame.UnloadWorldSystem],
            interval: 50}
@@ -28,6 +30,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
     * `:systems` - required list of regular systems
     * `:startup_systems` - systems executed once before event subscription
+    * `:pre_tick_systems` - systems executed before `:systems` on every tick
+    * `:post_tick_systems` - systems executed after `:systems` on every tick
     * `:shutdown_systems` - systems executed sequentially when the partition
       terminates gracefully
     * `:interval` - milliseconds between scheduled ticks; `0` runs without an
@@ -37,7 +41,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
     * `:event_source` - event source name or PID; defaults to the global source
     * `:system_timeout` - timeout for one execution; defaults to `:infinity`
 
-  Partitions emit `:telemetry` spans under
+  Pre-tick, tick, and post-tick systems are separated by phase barriers. Every
+  callback receives its phase in the system context. Partitions emit
+  `:telemetry` spans under
   `[:elvengard_ecs, :startup_system_run]` and
   `[:elvengard_ecs, :shutdown_system_run]` and
   `[:elvengard_ecs, :system_run]`, plus `[:elvengard_ecs, :partition_init]`
@@ -107,6 +113,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
     systems = specs[:systems] || raise ArgumentError, ":systems is required"
     startup_systems = Keyword.get(specs, :startup_systems, [])
+    pre_tick_systems = Keyword.get(specs, :pre_tick_systems, [])
+    post_tick_systems = Keyword.get(specs, :post_tick_systems, [])
     shutdown_systems = Keyword.get(specs, :shutdown_systems, [])
     interval = Keyword.get(specs, :interval, 1_000)
     concurrency = Keyword.get(specs, :concurrency, System.schedulers_online())
@@ -120,6 +128,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
       next_tick: tick,
       interval: interval,
       startup_systems: startup_systems,
+      pre_tick_systems: pre_tick_systems,
+      post_tick_systems: post_tick_systems,
       shutdown_systems: shutdown_systems,
       systems: systems,
       concurrency: concurrency,
@@ -139,8 +149,8 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
     # Run all startup_systems
     Enum.each(startup_systems, fn module ->
-      context = build_context(id, :startup)
-      metadata = %{system: module, partition: id}
+      context = build_context(id, :startup, :startup)
+      metadata = %{system: module, partition: id, phase: :startup}
 
       # Send Telemetry
       :telemetry.span(
@@ -168,7 +178,14 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   @impl true
   def handle_info(:tick, state) do
-    %{systems: systems, events: event_batches, prev_tick: prev_tick} = state
+    %{
+      pre_tick_systems: pre_tick_systems,
+      systems: systems,
+      post_tick_systems: post_tick_systems,
+      events: event_batches,
+      prev_tick: prev_tick
+    } = state
+
     tick = now()
     delta = tick - prev_tick
 
@@ -179,9 +196,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
         _ -> event_batches |> :lists.reverse() |> :lists.append()
       end
 
-    systems
-    |> Enum.flat_map(&expand_with_events(&1, events))
-    |> batch_and_execute(state, delta)
+    execute_phase(pre_tick_systems, events, state, delta, :pre_tick)
+    execute_phase(systems, events, state, delta, :tick)
+    execute_phase(post_tick_systems, events, state, delta, :post_tick)
 
     new_state = %{state | events: [], prev_tick: tick}
     {:noreply, schedule_next_tick(new_state)}
@@ -236,10 +253,18 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   defp now(), do: System.monotonic_time(:millisecond)
 
-  defp build_context(partition, delta), do: %{partition: partition, delta: delta}
+  defp build_context(partition, delta, phase) do
+    %{partition: partition, delta: delta, phase: phase}
+  end
 
   defp build_shutdown_context(partition, reason) do
-    %{partition: partition, delta: :shutdown, reason: reason}
+    %{partition: partition, delta: :shutdown, phase: :shutdown, reason: reason}
+  end
+
+  defp execute_phase(systems, events, state, delta, phase) do
+    systems
+    |> Enum.flat_map(&expand_with_events(&1, events))
+    |> batch_and_execute(state, delta, phase)
   end
 
   defp run_shutdown_system(module, context) do
@@ -281,9 +306,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
     %{state | next_tick: time + remaining_time}
   end
 
-  defp batch_and_execute([], _state, _delta), do: :ok
+  defp batch_and_execute([], _state, _delta, _phase), do: :ok
 
-  defp batch_and_execute(systems, state, delta) do
+  defp batch_and_execute(systems, state, delta, phase) do
     %{
       id: id,
       concurrency: concurrency,
@@ -295,7 +320,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     succeed =
       batch
       |> Task.async_stream(
-        &execute(&1, delta, id),
+        &execute(&1, delta, id, phase),
         max_concurrency: concurrency,
         ordered: false,
         timeout: system_timeout,
@@ -313,13 +338,13 @@ defmodule ElvenGard.ECS.Topology.Partition do
       end)
     end
 
-    batch_and_execute(remaining, state, delta)
+    batch_and_execute(remaining, state, delta, phase)
   end
 
   # System subscribing to events
-  defp execute({system, event} = value, delta, partition) do
-    context = build_context(partition, delta)
-    metadata = %{partition: partition, system: system, event: event}
+  defp execute({system, event} = value, delta, partition, phase) do
+    context = build_context(partition, delta, phase)
+    metadata = %{partition: partition, system: system, event: event, phase: phase}
 
     # Send Telemetry
     :telemetry.span(
@@ -337,9 +362,9 @@ defmodule ElvenGard.ECS.Topology.Partition do
   end
 
   # Permanents systems
-  defp execute(system, delta, partition) do
-    context = build_context(partition, delta)
-    metadata = %{partition: partition, system: system, event: nil}
+  defp execute(system, delta, partition, phase) do
+    context = build_context(partition, delta, phase)
+    metadata = %{partition: partition, system: system, event: nil, phase: phase}
 
     # Send Telemetry
     :telemetry.span(

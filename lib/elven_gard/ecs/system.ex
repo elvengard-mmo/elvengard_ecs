@@ -29,11 +29,15 @@ defmodule ElvenGard.ECS.System do
   @typedoc "Elapsed milliseconds for a regular tick, or a lifecycle phase."
   @type delta :: non_neg_integer() | :startup | :shutdown
 
+  @typedoc "Lifecycle or tick phase executing the system callback."
+  @type phase :: :startup | :pre_tick | :tick | :post_tick | :shutdown
+
   @typedoc "Context passed to every system callback."
   @type context :: %{
           optional(:reason) => any(),
           partition: any(),
-          delta: delta()
+          delta: delta(),
+          phase: phase()
         }
 
   @doc "Runs once per partition tick when implemented."
