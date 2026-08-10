@@ -146,6 +146,63 @@ defmodule ElvenGard.ECS.QueryTest do
       assert [{^entity, [%PositionComponent{map_id: ^map_id}]}] = Query.all(query)
     end
 
+    test "component specs support membership filters" do
+      partition = make_ref()
+      first_chunk = {:chunk, make_ref()}
+      second_chunk = {:chunk, make_ref()}
+      hidden_chunk = {:chunk, make_ref()}
+
+      first_entity =
+        spawn_entity(
+          partition: partition,
+          components: [{PositionComponent, map_id: first_chunk}]
+        )
+
+      second_entity =
+        spawn_entity(
+          partition: partition,
+          components: [{PositionComponent, map_id: second_chunk}]
+        )
+
+      _hidden_entity =
+        spawn_entity(
+          partition: partition,
+          components: [{PositionComponent, map_id: hidden_chunk}]
+        )
+
+      _outside_partition =
+        spawn_entity(components: [{PositionComponent, map_id: first_chunk}])
+
+      global_query =
+        Query.select(PositionComponent,
+          with: [{PositionComponent, [{:in, :map_id, [first_chunk, second_chunk]}]}]
+        )
+
+      assert global_query
+             |> Query.all()
+             |> Enum.map(& &1.map_id)
+             |> MapSet.new() == MapSet.new([first_chunk, second_chunk])
+
+      partition_query =
+        Query.select(Entity,
+          with: [{PositionComponent, [{:in, :map_id, [first_chunk, second_chunk]}]}],
+          partition: partition
+        )
+
+      assert partition_query
+             |> Query.all()
+             |> Enum.map(&elem(&1, 0))
+             |> MapSet.new() == MapSet.new([first_entity, second_entity])
+
+      empty_query =
+        Query.select(PositionComponent,
+          with: [{PositionComponent, [{:in, :map_id, []}]}],
+          partition: partition
+        )
+
+      assert Query.all(empty_query) == []
+    end
+
     test "component specs support an empty filter list" do
       entity = spawn_entity(components: [PlayerComponent])
       query = Query.select(Entity, with: [{PlayerComponent, []}])

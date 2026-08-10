@@ -655,9 +655,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
       {component_mod, specs} ->
         specs
-        |> Enum.map(fn {op, field, value} ->
-          {op, {:map_get, field, :"$4"}, escape_match_spec_constant(value)}
-        end)
+        |> Enum.map(&component_filter_guard(&1, :"$4"))
         |> Enum.reduce(&{:andalso, &1, &2})
         |> then(&{:andalso, {:==, :"$3", component_mod}, &1})
 
@@ -720,8 +718,20 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     :ets.match_spec_run(components, match_spec)
   end
 
-  defp component_value_guard({op, field, value}) do
-    {op, {:map_get, field, :"$1"}, escape_match_spec_constant(value)}
+  defp component_value_guard(filter) do
+    component_filter_guard(filter, :"$1")
+  end
+
+  defp component_filter_guard({:in, field, values}, source) when is_list(values) do
+    values
+    |> Enum.map(fn value ->
+      {:==, {:map_get, field, source}, escape_match_spec_constant(value)}
+    end)
+    |> Enum.reduce({:==, true, false}, &{:orelse, &1, &2})
+  end
+
+  defp component_filter_guard({op, field, value}, source) do
+    {op, {:map_get, field, source}, escape_match_spec_constant(value)}
   end
 
   defp apply_return_type(tuples, Entity) do

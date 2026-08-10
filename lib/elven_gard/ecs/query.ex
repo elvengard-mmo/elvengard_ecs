@@ -59,7 +59,8 @@ defmodule ElvenGard.ECS.Query do
 
     * `:with` - component modules that every result must contain. A component
       can be constrained with `{module, [{operator, field, value}]}`. Pass
-      `:selected` to require every component module in the return type.
+      `:selected` to require every component module in the return type. The
+      `:in` operator accepts a list and matches values equal to any member.
     * `:preload` - component modules included with entity results, or `:all`.
     * `:partition` - restricts results to one partition; defaults to `:any`.
 

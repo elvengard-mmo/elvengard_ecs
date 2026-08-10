@@ -64,6 +64,21 @@ Each filter is `{operator, field, value}`. Operators are passed to the default
 Mnesia backend as match-spec guard operators. Multiple filters on one component
 are combined with logical `and`.
 
+Use `:in` to match one field against several exact values in one query. This is
+useful for area-of-interest queries over a set of visible chunks:
+
+```elixir
+visible_chunks = [{10, 10}, {10, 11}, {11, 10}]
+
+query =
+  Query.select(Entity,
+    with: [{Position, [{:in, :chunk, visible_chunks}]}],
+    partition: room_id
+  )
+```
+
+An empty membership list matches nothing.
+
 Tuple constants, including references and composite identifiers, are escaped
 for Mnesia match specs automatically.
 
