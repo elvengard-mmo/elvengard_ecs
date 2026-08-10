@@ -7,7 +7,9 @@ defmodule ElvenGard.ECS.Command do
   the complete operation.
   """
 
-  alias ElvenGard.ECS.{Component, Config, Entity, Query}
+  alias ElvenGard.ECS.{Component, Config, Entity, Multi, Query}
+
+  @multi_failure :elvengard_ecs_multi_failure
 
   ## Transactions
 
@@ -20,6 +22,29 @@ defmodule ElvenGard.ECS.Command do
   @spec transaction((-> result)) :: {:error, any()} | {:ok, result} when result: any()
   def transaction(query) do
     Config.backend().transaction(query)
+  end
+
+  @doc """
+  Executes every operation in a multi inside one backend transaction.
+
+  Successful results are returned by operation name. The first failed
+  operation rolls the transaction back and returns its name, reason, and the
+  successful results produced before the failure.
+  """
+  @spec transact(Multi.t()) :: {:ok, Multi.changes()} | Multi.failure() | {:error, any()}
+  def transact(%Multi{} = multi) do
+    result = fn ->
+      multi
+      |> Multi.to_list()
+      |> execute_multi(%{}, Multi.__names__(multi))
+      |> elem(0)
+    end
+
+    case transaction(result) do
+      {:ok, changes} -> {:ok, changes}
+      {:error, {@multi_failure, name, reason, changes}} -> {:error, name, reason, changes}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc "Aborts the current backend transaction with `reason`."
@@ -138,7 +163,116 @@ defmodule ElvenGard.ECS.Command do
 
   ## Components
 
-  ## Private helpers
+  ## Private function
+
+  defp execute_multi([], changes, names), do: {changes, names}
+
+  defp execute_multi([{:merge, {:merge, function}} | operations], changes, names) do
+    nested_multi = function.(changes)
+    nested_names = Multi.__names__(nested_multi)
+    ensure_unique_multi_names!(names, nested_names)
+
+    {changes, names} =
+      nested_multi
+      |> Multi.to_list()
+      |> execute_multi(changes, MapSet.union(names, nested_names))
+
+    execute_multi(operations, changes, names)
+  end
+
+  defp execute_multi([{name, operation} | operations], changes, names) do
+    case execute_multi_operation(operation, changes) do
+      {:ok, value} ->
+        execute_multi(operations, Map.put(changes, name, value), names)
+
+      {:error, reason} ->
+        abort({@multi_failure, name, reason, changes})
+
+      value ->
+        raise ArgumentError,
+              "ElvenGard.ECS.Multi operation #{inspect(name)} must return " <>
+                "{:ok, value} or {:error, reason}, got: #{inspect(value)}"
+    end
+  end
+
+  defp execute_multi_operation({:spawn_entity, spec}, changes) do
+    spec |> resolve_multi_value(changes) |> spawn_entity()
+  end
+
+  defp execute_multi_operation({:despawn_entity, entity, on_child_delete}, changes) do
+    entity |> resolve_multi_value(changes) |> despawn_entity(on_child_delete)
+  end
+
+  defp execute_multi_operation({:set_parent, entity, parent}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    parent = resolve_multi_value(parent, changes)
+
+    case set_parent(entity, parent) do
+      :ok -> {:ok, parent}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp execute_multi_operation({:set_partition, entity, partition}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    partition = resolve_multi_value(partition, changes)
+
+    case set_partition(entity, partition) do
+      :ok -> {:ok, partition}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp execute_multi_operation({:add_component, entity, component}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    component = resolve_multi_value(component, changes)
+    add_component(entity, component)
+  end
+
+  defp execute_multi_operation({:delete_component, entity, component}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    component = resolve_multi_value(component, changes)
+
+    case delete_component(entity, component) do
+      :ok -> {:ok, component}
+    end
+  end
+
+  defp execute_multi_operation({:replace_component, entity, component}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    component = resolve_multi_value(component, changes)
+
+    case replace_component(entity, component) do
+      :ok -> {:ok, component}
+    end
+  end
+
+  defp execute_multi_operation({:update_component, entity, component, attrs}, changes) do
+    entity = resolve_multi_value(entity, changes)
+    component = resolve_multi_value(component, changes)
+    attrs = resolve_multi_value(attrs, changes)
+    update_component(entity, component, attrs)
+  end
+
+  defp execute_multi_operation({:put, value}, _changes), do: {:ok, value}
+  defp execute_multi_operation({:run, function}, changes), do: function.(changes)
+  defp execute_multi_operation({:error, reason}, _changes), do: {:error, reason}
+
+  defp resolve_multi_value(function, changes) when is_function(function, 1),
+    do: function.(changes)
+
+  defp resolve_multi_value(value, _changes), do: value
+
+  defp ensure_unique_multi_names!(existing, nested) do
+    case existing |> MapSet.intersection(nested) |> MapSet.to_list() do
+      [] ->
+        :ok
+
+      names ->
+        raise ArgumentError,
+              "cannot merge ElvenGard.ECS.Multi because operations already exist: #{inspect(names)}"
+    end
+  end
 
   defp unwrap({:ok, value}), do: value
 

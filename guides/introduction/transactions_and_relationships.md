@@ -32,6 +32,41 @@ end)
 The aborted transaction returns `{:error, :not_allowed}` and rolls back its
 writes.
 
+## Named command batches
+
+Use `ElvenGard.ECS.Multi` when a transaction contains several named commands or
+when later commands depend on earlier results:
+
+```elixir
+alias ElvenGard.ECS.{Command, Multi}
+
+multi =
+  Multi.new()
+  |> Multi.spawn_entity(:player, player_spec)
+  |> Multi.add_component(
+    :spawn_protection,
+    fn %{player: {entity, _components}} -> entity end,
+    MyGame.SpawnProtection
+  )
+  |> Multi.run(:notify_domain, fn %{player: {entity, _components}} ->
+    MyGame.record_spawn(entity)
+  end)
+
+case Command.transact(multi) do
+  {:ok, %{player: {entity, components}}} ->
+    {:ok, entity, components}
+
+  {:error, failed_operation, reason, changes_so_far} ->
+    {:error, failed_operation, reason, changes_so_far}
+end
+```
+
+Every name must be unique. `Multi.append/2` and `Multi.prepend/2` combine static
+batches, while `Multi.merge/2` builds a dependent batch from results produced
+so far. The first `{:error, reason}` rolls every ECS write back. A `run/3`
+callback must not perform an irreversible external side effect because the
+backend cannot roll that effect back.
+
 ## Spawning entities atomically
 
 `Command.spawn_entity/1` creates the entity, attaches its children, and inserts
@@ -106,4 +141,3 @@ application requires a valid parent reference.
 
 The complete recursive cascade shares one transaction. A callback crash, an
 explicit abort, or another backend failure rolls back every deletion.
-

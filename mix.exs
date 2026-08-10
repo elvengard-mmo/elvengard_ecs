@@ -96,6 +96,7 @@ defmodule ElvenGard.ECS.MixProject do
         ElvenGard.ECS.Component,
         ElvenGard.ECS.Bundle,
         ElvenGard.ECS.Command,
+        ElvenGard.ECS.Multi,
         ElvenGard.ECS.Query
       ],
       Topology: [
