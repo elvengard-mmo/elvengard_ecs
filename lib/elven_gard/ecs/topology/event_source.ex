@@ -75,30 +75,61 @@ defmodule ElvenGard.ECS.Topology.EventSource do
     GenServer.cast(name, {:dispatch, events})
   end
 
+  @doc """
+  Dispatches events and waits until every destination partition has completed
+  the tick that consumed them.
+
+  Unlike `dispatch/2`, this operation requires every destination partition to
+  be subscribed when it starts. A timeout stops waiting but does not cancel
+  events that have already been delivered.
+  """
+  @spec dispatch_and_wait(GenServer.server(), [Event.t()], timeout()) ::
+          :ok
+          | {:error, :timeout}
+          | {:error, {:partition_unavailable, [any()]}}
+          | {:error, {:partition_down, [any()]}}
+          | {:error, {:systems_failed, %{optional(any()) => [module()]}}}
+  def dispatch_and_wait(name \\ name(), events, timeout \\ 5_000) do
+    GenServer.call(name, {:dispatch_and_wait, events, timeout}, :infinity)
+  end
+
+  @doc false
+  @spec ack(GenServer.server(), reference(), any(), [module()]) :: :ok
+  def ack(name, receipt, partition, failed_systems) do
+    GenServer.cast(name, {:ack, receipt, partition, failed_systems})
+  end
+
   ## GenServer behaviour
 
   @impl true
   def init(_opts) do
-    # partitions = %{partition => pid}
-    # subscribers = %{pid => {partition, ref}}
-    # discarded = %{partition => {queue, event_count}}
-    # {partitions, subscribers, discarded}
-    {:ok, {%{}, %{}, %{}}}
+    {:ok,
+     %{
+       partitions: %{},
+       subscribers: %{},
+       discarded: %{},
+       waiters: %{},
+       waiter_monitors: %{}
+     }}
   end
 
   @impl true
-  def handle_call({:subscribe, partition}, {pid, _}, {partitions, subs, discarded} = state) do
+  def handle_call({:subscribe, partition}, {pid, _}, state) do
+    %{partitions: partitions, subscribers: subscribers, discarded: discarded} = state
+
     case partition_exists?(partitions, partition) do
       false ->
         ref = Process.monitor(pid)
-        subs = Map.put(subs, pid, {partition, ref})
+        subscribers = Map.put(subscribers, pid, {partition, ref})
         partitions = Map.put(partitions, partition, pid)
 
         {{pending, _event_count}, discarded} =
           Map.pop(discarded, partition, {:queue.new(), 0})
 
         :ok = maybe_send(pid, :queue.to_list(pending))
-        {:reply, :ok, {partitions, subs, discarded}}
+
+        {:reply, :ok,
+         %{state | partitions: partitions, subscribers: subscribers, discarded: discarded}}
 
       true ->
         Logger.error("there is already a consumer for the partition: #{partition}")
@@ -106,35 +137,104 @@ defmodule ElvenGard.ECS.Topology.EventSource do
     end
   end
 
+  def handle_call({:dispatch_and_wait, events, timeout}, from, state) do
+    grouped_events = Enum.group_by(events, & &1.partition, & &1)
+    unavailable = unavailable_partitions(grouped_events, state.partitions)
+
+    case {map_size(grouped_events), unavailable} do
+      {0, []} ->
+        {:reply, :ok, state}
+
+      {_, []} ->
+        {receipt, state} = register_waiter(from, Map.keys(grouped_events), timeout, state)
+        dispatch_tracked_events(grouped_events, state.partitions, receipt)
+        {:noreply, state}
+
+      {_, partitions} ->
+        {:reply, {:error, {:partition_unavailable, partitions}}, state}
+    end
+  end
+
   @impl true
-  def handle_cast({:unsubscribe, pid}, {partitions, subs, discarded} = state) do
-    case Map.pop(subs, pid) do
-      {{partition, ref}, subs} ->
+  def handle_cast({:unsubscribe, pid}, state) do
+    %{partitions: partitions, subscribers: subscribers} = state
+
+    case Map.pop(subscribers, pid) do
+      {{partition, ref}, subscribers} ->
         partitions = Map.delete(partitions, partition)
         true = Process.demonitor(ref, [:flush])
-        {:noreply, {partitions, subs, discarded}}
 
-      {nil, _subs} ->
+        state = %{state | partitions: partitions, subscribers: subscribers}
+        {:noreply, fail_partition_waiters(state, partition)}
+
+      {nil, _subscribers} ->
         Logger.error("can't unsubscribe process #{inspect(pid)}: not registered")
         {:noreply, state}
     end
   end
 
-  def handle_cast({:dispatch, events}, {partitions, subs, discarded}) do
+  def handle_cast({:dispatch, events}, state) do
     discarded =
       events
       |> Enum.group_by(& &1.partition, & &1)
       |> Enum.to_list()
-      |> dispatch_events(partitions, discarded)
+      |> dispatch_events(state.partitions, state.discarded)
 
-    {:noreply, {partitions, subs, discarded}}
+    {:noreply, %{state | discarded: discarded}}
+  end
+
+  def handle_cast({:ack, receipt, partition, failed_systems}, state) do
+    case state.waiters do
+      %{^receipt => waiter} ->
+        pending = MapSet.delete(waiter.pending, partition)
+
+        failures =
+          case failed_systems do
+            [] -> waiter.failures
+            systems -> Map.put(waiter.failures, partition, systems)
+          end
+
+        waiter = %{waiter | pending: pending, failures: failures}
+
+        case MapSet.size(pending) do
+          0 -> {:noreply, complete_waiter(state, receipt, waiter)}
+          _ -> {:noreply, put_in(state.waiters[receipt], waiter)}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, pid, _}, {partitions, subs, discarded}) do
-    {{partition, ^ref}, subs} = Map.pop!(subs, pid)
-    partitions = Map.delete(partitions, partition)
-    {:noreply, {partitions, subs, discarded}}
+  def handle_info({:await_timeout, receipt}, state) do
+    case Map.fetch(state.waiters, receipt) do
+      {:ok, waiter} ->
+        GenServer.reply(waiter.from, {:error, :timeout})
+        {:noreply, delete_waiter(state, receipt, waiter)}
+
+      :error ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    case Map.pop(state.waiter_monitors, ref) do
+      {receipt, waiter_monitors} when not is_nil(receipt) ->
+        state = %{state | waiter_monitors: waiter_monitors}
+
+        case Map.pop(state.waiters, receipt) do
+          {nil, _waiters} ->
+            {:noreply, state}
+
+          {waiter, waiters} ->
+            cancel_waiter_timer(waiter.timer)
+            {:noreply, %{state | waiters: waiters}}
+        end
+
+      {nil, _waiter_monitors} ->
+        handle_subscriber_down(state, pid, ref)
+    end
   end
 
   ## Internal API
@@ -147,6 +247,103 @@ defmodule ElvenGard.ECS.Topology.EventSource do
 
   defp maybe_send(_pid, []), do: :ok
   defp maybe_send(pid, events), do: GenServer.cast(pid, {:events, events})
+
+  defp dispatch_tracked_events(grouped_events, partitions, receipt) do
+    Enum.each(grouped_events, fn {partition, events} ->
+      pid = Map.fetch!(partitions, partition)
+      GenServer.cast(pid, {:tracked_events, receipt, self(), events})
+    end)
+  end
+
+  defp unavailable_partitions(grouped_events, partitions) do
+    grouped_events
+    |> Map.keys()
+    |> Enum.reject(&Map.has_key?(partitions, &1))
+    |> Enum.sort()
+  end
+
+  defp register_waiter(from, partitions, timeout, state) do
+    receipt = make_ref()
+    {caller, _tag} = from
+    monitor = Process.monitor(caller)
+    timer = start_waiter_timer(receipt, timeout)
+
+    waiter = %{
+      from: from,
+      pending: MapSet.new(partitions),
+      failures: %{},
+      timer: timer,
+      monitor: monitor
+    }
+
+    state = %{
+      state
+      | waiters: Map.put(state.waiters, receipt, waiter),
+        waiter_monitors: Map.put(state.waiter_monitors, monitor, receipt)
+    }
+
+    {receipt, state}
+  end
+
+  defp start_waiter_timer(_receipt, :infinity), do: nil
+
+  defp start_waiter_timer(receipt, timeout) do
+    Process.send_after(self(), {:await_timeout, receipt}, timeout)
+  end
+
+  defp complete_waiter(state, receipt, waiter) do
+    reply =
+      case map_size(waiter.failures) do
+        0 -> :ok
+        _ -> {:error, {:systems_failed, waiter.failures}}
+      end
+
+    GenServer.reply(waiter.from, reply)
+    delete_waiter(state, receipt, waiter)
+  end
+
+  defp delete_waiter(state, receipt, waiter) do
+    cancel_waiter_timer(waiter.timer)
+    true = Process.demonitor(waiter.monitor, [:flush])
+
+    %{
+      state
+      | waiters: Map.delete(state.waiters, receipt),
+        waiter_monitors: Map.delete(state.waiter_monitors, waiter.monitor)
+    }
+  end
+
+  defp cancel_waiter_timer(nil), do: :ok
+
+  defp cancel_waiter_timer(timer) do
+    _result = Process.cancel_timer(timer)
+    :ok
+  end
+
+  defp handle_subscriber_down(state, pid, ref) do
+    case Map.pop(state.subscribers, pid) do
+      {{partition, ^ref}, subscribers} ->
+        partitions = Map.delete(state.partitions, partition)
+        state = %{state | partitions: partitions, subscribers: subscribers}
+        {:noreply, fail_partition_waiters(state, partition)}
+
+      {nil, _subscribers} ->
+        {:noreply, state}
+    end
+  end
+
+  defp fail_partition_waiters(state, partition) do
+    Enum.reduce(state.waiters, state, fn {receipt, waiter}, acc_state ->
+      case MapSet.member?(waiter.pending, partition) do
+        true ->
+          GenServer.reply(waiter.from, {:error, {:partition_down, [partition]}})
+          delete_waiter(acc_state, receipt, waiter)
+
+        false ->
+          acc_state
+      end
+    end)
+  end
 
   defp do_start_link({:global, name}, opts) do
     case :global.whereis_name(name) do

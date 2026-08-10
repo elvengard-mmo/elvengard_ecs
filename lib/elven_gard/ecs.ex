@@ -6,8 +6,9 @@ defmodule ElvenGard.ECS do
   and executes systems inside partitions. Most applications use
   `ElvenGard.ECS.Command` for writes and `ElvenGard.ECS.Query` for reads.
 
-  This module provides the clock used by events and `push/2`, which timestamps
-  events before forwarding them to `ElvenGard.ECS.Topology.EventSource`.
+  This module provides the clock used by events and dispatch functions that
+  timestamp events before forwarding them to
+  `ElvenGard.ECS.Topology.EventSource`.
   """
 
   alias ElvenGard.ECS.Event
@@ -48,6 +49,44 @@ defmodule ElvenGard.ECS do
         partition_event = Enum.map(events, &Map.put(&1, :partition, partition))
         EventSource.dispatch(partition_event)
         {:ok, partition_event}
+    end
+  end
+
+  @doc """
+  Timestamps and dispatches events, then waits for their processing tick.
+
+  The `:partition` option has the same override semantics as `push/2`.
+  `:event_source` selects a custom event source and `:timeout` controls how
+  long to await partition acknowledgements; they default to the global source
+  and 5,000 milliseconds.
+
+  A timeout only stops the caller from waiting. Events that were delivered are
+  still processed. Use `push/2` when the caller does not require an
+  acknowledgement; its asynchronous fast path does not allocate or track a
+  receipt.
+  """
+  @spec push_and_wait(Event.t() | [Event.t()], Keyword.t()) ::
+          {:ok, [Event.t()]}
+          | {:error, :timeout}
+          | {:error, {:partition_unavailable, [any()]}}
+          | {:error, {:partition_down, [any()]}}
+          | {:error, {:systems_failed, %{optional(any()) => [module()]}}}
+  def push_and_wait(maybe_events, opts \\ []) do
+    now = now()
+    events = maybe_events |> List.wrap() |> Enum.map(&Map.put(&1, :inserted_at, now))
+
+    events =
+      case Keyword.get(opts, :partition) do
+        nil -> events
+        partition -> Enum.map(events, &Map.put(&1, :partition, partition))
+      end
+
+    event_source = Keyword.get(opts, :event_source, EventSource.name())
+    timeout = Keyword.get(opts, :timeout, 5_000)
+
+    case EventSource.dispatch_and_wait(event_source, events, timeout) do
+      :ok -> {:ok, events}
+      {:error, _reason} = error -> error
     end
   end
 end

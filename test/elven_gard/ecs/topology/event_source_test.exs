@@ -65,6 +65,37 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
     assert_receive {:"$gen_cast", {:events, ^events}}
   end
 
+  test "waits for tracked dispatch acknowledgements", %{source: source} do
+    :ok = EventSource.subscribe(source, partition: :odd)
+    events = Enum.map([1, 3], &OddEvenEvent.new/1)
+    dispatch = Task.async(fn -> EventSource.dispatch_and_wait(source, events, 1_000) end)
+
+    assert_receive {:"$gen_cast", {:tracked_events, receipt, ^source, ^events}}
+    :ok = EventSource.ack(source, receipt, :odd, [])
+
+    assert Task.await(dispatch) == :ok
+  end
+
+  test "returns an error when an awaited partition is unavailable", %{source: source} do
+    events = [OddEvenEvent.new(1)]
+
+    assert EventSource.dispatch_and_wait(source, events, 1_000) ==
+             {:error, {:partition_unavailable, [:odd]}}
+  end
+
+  test "times awaited dispatches out without cancelling delivery", %{source: source} do
+    :ok = EventSource.subscribe(source, partition: :odd)
+    events = [OddEvenEvent.new(1)]
+    dispatch = Task.async(fn -> EventSource.dispatch_and_wait(source, events, 10) end)
+
+    assert_receive {:"$gen_cast", {:tracked_events, _receipt, ^source, ^events}}
+    assert Task.await(dispatch) == {:error, :timeout}
+
+    %{waiters: waiters, waiter_monitors: waiter_monitors} = :sys.get_state(source)
+    assert waiters == %{}
+    assert waiter_monitors == %{}
+  end
+
   test "buffers events before subscription", %{source: source} do
     :ok = EventSource.dispatch(source, Enum.map([1, 3], &OddEvenEvent.new/1))
     :ok = EventSource.dispatch(source, Enum.map([7, 9], &OddEvenEvent.new/1))
@@ -163,7 +194,7 @@ defmodule ElvenGard.ECS.Topology.EventSourceTest do
   ## Helpers
 
   defp partitions(source) do
-    {partitions, _subscribers, _discarded} = :sys.get_state(source)
+    %{partitions: partitions} = :sys.get_state(source)
     partitions
   end
 

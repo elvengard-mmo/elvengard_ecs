@@ -12,9 +12,9 @@ defmodule ElvenGard.ECS.Event do
 
     * `:partition` - destination partition, defaulting to `:default`
     * `:inserted_at` - monotonic dispatch timestamp, populated by
-      `ElvenGard.ECS.push/2`
+      `ElvenGard.ECS.push/2` or `ElvenGard.ECS.push_and_wait/2`
 
-  Dispatch events through `ElvenGard.ECS.push/2` rather than calling an event
+  Dispatch events through one of those functions rather than calling an event
   source directly when the timestamp is required.
   """
 

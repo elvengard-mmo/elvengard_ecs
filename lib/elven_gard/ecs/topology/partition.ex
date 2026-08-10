@@ -136,6 +136,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       source: source,
       system_timeout: system_timeout,
       events: [],
+      receipts: [],
       started: false
     }
 
@@ -183,6 +184,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
       systems: systems,
       post_tick_systems: post_tick_systems,
       events: event_batches,
+      receipts: receipts,
       prev_tick: prev_tick
     } = state
 
@@ -196,17 +198,28 @@ defmodule ElvenGard.ECS.Topology.Partition do
         _ -> event_batches |> :lists.reverse() |> :lists.append()
       end
 
-    execute_phase(pre_tick_systems, events, state, delta, :pre_tick)
-    execute_phase(systems, events, state, delta, :tick)
-    execute_phase(post_tick_systems, events, state, delta, :post_tick)
+    failures =
+      execute_phase(pre_tick_systems, events, state, delta, :pre_tick) ++
+        execute_phase(systems, events, state, delta, :tick) ++
+        execute_phase(post_tick_systems, events, state, delta, :post_tick)
 
-    new_state = %{state | events: [], prev_tick: tick}
+    failed_systems = failures |> Enum.map(&failed_system/1) |> Enum.uniq()
+    acknowledge_receipts(receipts, failed_systems, state.id)
+
+    new_state = %{state | events: [], receipts: [], prev_tick: tick}
     {:noreply, schedule_next_tick(new_state)}
   end
 
   @impl true
   def handle_cast({:events, new_events}, %{events: events} = state) do
     {:noreply, %{state | events: [new_events | events]}}
+  end
+
+  def handle_cast(
+        {:tracked_events, receipt, source, new_events},
+        %{events: events, receipts: receipts} = state
+      ) do
+    {:noreply, %{state | events: [new_events | events], receipts: [{source, receipt} | receipts]}}
   end
 
   @impl true
@@ -306,7 +319,7 @@ defmodule ElvenGard.ECS.Topology.Partition do
     %{state | next_tick: time + remaining_time}
   end
 
-  defp batch_and_execute([], _state, _delta, _phase), do: :ok
+  defp batch_and_execute([], _state, _delta, _phase), do: []
 
   defp batch_and_execute(systems, state, delta, phase) do
     %{
@@ -338,7 +351,18 @@ defmodule ElvenGard.ECS.Topology.Partition do
       end)
     end
 
-    batch_and_execute(remaining, state, delta, phase)
+    failed ++ batch_and_execute(remaining, state, delta, phase)
+  end
+
+  defp failed_system({system, _event}), do: system
+  defp failed_system(system), do: system
+
+  defp acknowledge_receipts([], _failed_systems, _partition), do: :ok
+
+  defp acknowledge_receipts(receipts, failed_systems, partition) do
+    Enum.each(receipts, fn {source, receipt} ->
+      EventSource.ack(source, receipt, partition, failed_systems)
+    end)
   end
 
   # System subscribing to events

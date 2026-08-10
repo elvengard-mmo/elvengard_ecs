@@ -159,7 +159,25 @@ event = %MyGame.Events.MoveRequested{
 ```
 
 Pass `partition: id` to `push/2` to override the destination on every event in
-the call.
+the call. This is the fire-and-forget path: it sends one asynchronous message
+without creating a receipt or retaining waiter state.
+
+Use `push_and_wait/2` when the caller must know that every destination
+partition completed the tick containing the events:
+
+```elixir
+{:ok, [processed_event]} =
+  ElvenGard.ECS.push_and_wait(event,
+    partition: :world_1,
+    timeout: 1_000
+  )
+```
+
+The acknowledgement is emitted after the partition completes its pre-tick,
+regular tick, and post-tick systems. It confirms ECS processing, not delivery
+to an external client. Every destination partition must already be subscribed.
+A timeout stops waiting but never cancels events already delivered to a
+partition.
 
 Events for a partition without a subscriber are buffered in order. The event
 source retains the latest 10,000 buffered events per partition and logs a

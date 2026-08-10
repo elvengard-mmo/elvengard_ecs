@@ -233,6 +233,30 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert_receive {:event_processed, 4}
   end
 
+  test "acknowledges tracked events after every tick phase completes", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [EventRecordingSystem],
+         interval: 60_000,
+         concurrency: 1}
+      )
+
+    assert Partition.started?(partition)
+    receipt = make_ref()
+    events = [%Test1Event{id: 1}]
+
+    GenServer.cast(partition, {:tracked_events, receipt, self(), events})
+    _state = :sys.get_state(partition)
+    send(partition, :tick)
+
+    assert_receive {:event_processed, 1}
+    assert_receive {:"$gen_cast", {:ack, ^receipt, test_pid, []}}
+    assert test_pid == self()
+  end
+
   test "reports a failed duplicate system execution", %{source: source} do
     counter = :atomics.new(1, [])
 
@@ -257,6 +281,33 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       end)
 
     assert log =~ "1 systems killed/crashed"
+  end
+
+  test "reports failed systems in a tracked event acknowledgement", %{source: source} do
+    counter = :atomics.new(1, [])
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [FailOnceEventSystem],
+         interval: 60_000,
+         concurrency: 2}
+      )
+
+    assert Partition.started?(partition)
+    receipt = make_ref()
+    event = %Test1Event{id: counter}
+
+    capture_log(fn ->
+      GenServer.cast(partition, {:tracked_events, receipt, self(), [event, event]})
+      _state = :sys.get_state(partition)
+      send(partition, :tick)
+
+      assert_receive {:"$gen_cast", {:ack, ^receipt, test_pid, [FailOnceEventSystem]}}
+      assert test_pid == self()
+    end)
   end
 
   test "runs shutdown systems with the partition and stop reason", %{source: source} do
