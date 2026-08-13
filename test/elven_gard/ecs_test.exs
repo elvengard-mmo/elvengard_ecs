@@ -19,6 +19,7 @@ defmodule ElvenGard.ECSTest do
     event = %TestEvent{value: 7, partition: :arena}
 
     assert EventSource.dispatch(source, [event]) == :ok
+    _ = :sys.get_state(source)
     assert_receive {:"$gen_cast", {:events, [^event]}}
 
     %{waiters: waiters} = :sys.get_state(source)

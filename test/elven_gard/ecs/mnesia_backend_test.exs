@@ -11,6 +11,20 @@ defmodule ElvenGard.ECS.MnesiaBackendTest do
     assert :ok = :mnesia.wait_for_tables([Entity, Component], 0)
   end
 
+  test "reuses an active transaction and preserves its rollback boundary" do
+    entity_id = make_ref()
+
+    assert {:error, :nested_abort} =
+             MnesiaBackend.transaction(fn ->
+               assert {:ok, %Entity{id: ^entity_id}} =
+                        MnesiaBackend.create_entity(entity_id, nil, :default)
+
+               MnesiaBackend.transaction(fn -> MnesiaBackend.abort(:nested_abort) end)
+             end)
+
+    assert {:error, :not_found} = MnesiaBackend.fetch_entity(entity_id)
+  end
+
   test "partitioned queries avoid global component table scans" do
     partition = make_ref()
     {:ok, entity} = MnesiaBackend.create_entity(make_ref(), nil, partition)

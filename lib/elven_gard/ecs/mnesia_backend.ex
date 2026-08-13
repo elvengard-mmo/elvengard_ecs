@@ -60,9 +60,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc "Executes a function in a Mnesia transaction."
   @spec transaction((-> result)) :: {:error, any()} | {:ok, result} when result: any()
   def transaction(query) do
-    case :mnesia.transaction(query) do
-      {:atomic, result} -> {:ok, result}
-      {:aborted, reason} -> {:error, reason}
+    case :mnesia.is_transaction() do
+      true ->
+        {:ok, query.()}
+
+      false ->
+        case :mnesia.transaction(query) do
+          {:atomic, result} -> {:ok, result}
+          {:aborted, reason} -> {:error, reason}
+        end
     end
   end
 
