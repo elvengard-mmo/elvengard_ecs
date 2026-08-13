@@ -92,6 +92,62 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
+  defmodule ChangeEmittingSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    alias ElvenGard.ECS.{ChangeSet, Entity, System}
+
+    @impl true
+    def run(%{partition: test_pid, phase: phase, change_sets: change_sets}) do
+      names = Enum.flat_map(change_sets, &change_names/1)
+      send(test_pid, {:visible_change_sets, phase, names})
+
+      entity = %Entity{id: {:phase, phase}}
+
+      ChangeSet.new()
+      |> ChangeSet.add(phase, {:set_parent, entity, nil})
+      |> System.emit_changes()
+    end
+
+    defp change_names(change_set) do
+      Enum.map(ChangeSet.to_list(change_set), &elem(&1, 0))
+    end
+  end
+
+  defmodule EventChangeEmittingSystem do
+    use ElvenGard.ECS.System,
+      lock_components: :sync,
+      event_subscriptions: [Test1Event]
+
+    alias ElvenGard.ECS.{ChangeSet, Entity, System}
+
+    @impl true
+    def run(%Test1Event{id: id}, %{partition: test_pid, change_sets: change_sets}) do
+      send(test_pid, {:event_visible_change_set_count, length(change_sets)})
+      entity = %Entity{id: {:event, id}}
+
+      ChangeSet.new()
+      |> ChangeSet.add({:event, id}, {:set_parent, entity, nil})
+      |> System.emit_changes()
+    end
+  end
+
+  defmodule ChangeObservingSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    alias ElvenGard.ECS.ChangeSet
+
+    @impl true
+    def run(%{partition: test_pid, phase: phase, change_sets: change_sets}) do
+      names =
+        Enum.flat_map(change_sets, fn change_set ->
+          Enum.map(ChangeSet.to_list(change_set), &elem(&1, 0))
+        end)
+
+      send(test_pid, {:observed_change_sets, phase, names})
+    end
+  end
+
   defmodule EventRecordingSystem do
     use ElvenGard.ECS.System,
       lock_components: [],
@@ -208,6 +264,57 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert_receive {:phase_run, second_phase}
     assert_receive {:phase_run, third_phase}
     assert [first_phase, second_phase, third_phase] == [:pre_tick, :tick, :post_tick]
+  end
+
+  test "carries emitted change sets into later phases and drops them after the tick", %{
+    source: source
+  } do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         pre_tick_systems: [ChangeEmittingSystem],
+         systems: [ChangeEmittingSystem],
+         post_tick_systems: [ChangeEmittingSystem],
+         interval: 60_000,
+         concurrency: 3}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    assert_receive {:visible_change_sets, :pre_tick, []}
+    assert_receive {:visible_change_sets, :tick, [:pre_tick]}
+    assert_receive {:visible_change_sets, :post_tick, [:pre_tick, :tick]}
+
+    send(partition, :tick)
+    assert_receive {:visible_change_sets, :pre_tick, []}
+  end
+
+  test "carries event-system changes into later batches and the post-tick phase", %{
+    source: source
+  } do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         pre_tick_systems: [EventChangeEmittingSystem, ChangeObservingSystem],
+         systems: [],
+         post_tick_systems: [ChangeObservingSystem],
+         interval: 60_000,
+         concurrency: 2}
+      )
+
+    assert Partition.started?(partition)
+    GenServer.cast(partition, {:events, [%Test1Event{id: 7}]})
+    _state = :sys.get_state(partition)
+    send(partition, :tick)
+
+    assert_receive {:event_visible_change_set_count, 0}
+    assert_receive {:observed_change_sets, :pre_tick, [{:event, 7}]}
+    assert_receive {:observed_change_sets, :post_tick, [{:event, 7}]}
   end
 
   test "preserves event order across batches", %{source: source} do

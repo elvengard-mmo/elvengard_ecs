@@ -37,11 +37,40 @@ every tick. A system may implement both callbacks.
 The callback context contains:
 
 ```elixir
-%{partition: partition_id, delta: elapsed_milliseconds, phase: :tick}
+%{
+  partition: partition_id,
+  delta: elapsed_milliseconds,
+  phase: :tick,
+  change_sets: previously_committed_change_sets
+}
 ```
 
 The phase is one of `:startup`, `:pre_tick`, `:tick`, `:post_tick`, or
 `:shutdown`. Startup systems receive `delta: :startup`.
+
+## Propagate committed changes through one tick
+
+A system can expose its committed transaction to later systems without keeping
+a journal:
+
+```elixir
+alias ElvenGard.ECS.{Command, System}
+
+{:ok, _results, change_set} = Command.transact_with_changes(multi)
+System.emit_changes(change_set)
+```
+
+The partition adds non-empty emitted change sets to `context.change_sets` for
+later execution batches and phases. Systems in the same concurrent batch see
+the same input context; their results become visible after the batch barrier.
+The list preserves configured execution order and is discarded after the
+post-tick phase. Startup, shutdown, and the first pre-tick batch receive an
+empty list.
+
+This mechanism is intended for bounded derived work such as replication,
+secondary-index synchronization, or audit telemetry for the current tick. It
+does not persist change sets, replay them after a crash, or make them part of
+authoritative ECS state.
 
 ## Component locks and concurrency
 
