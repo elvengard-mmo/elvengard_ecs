@@ -41,7 +41,8 @@ The callback context contains:
   partition: partition_id,
   delta: elapsed_milliseconds,
   phase: :tick,
-  change_sets: previously_committed_change_sets
+  change_sets: previously_committed_change_sets,
+  outputs: previously_emitted_system_outputs
 }
 ```
 
@@ -71,6 +72,29 @@ This mechanism is intended for bounded derived work such as replication,
 secondary-index synchronization, or audit telemetry for the current tick. It
 does not persist change sets, replay them after a crash, or make them part of
 authoritative ECS state.
+
+## Reuse derived work later in the tick
+
+A system can attach one ephemeral output to its committed changes:
+
+```elixir
+System.emit_changes(change_set, prepared_replication)
+```
+
+Later systems retrieve the latest output from that system without coupling to
+the internal representation of `context.outputs`:
+
+```elixir
+case System.output(context, MyGame.Systems.Simulation) do
+  {:ok, prepared_replication} -> replicate(prepared_replication)
+  :error -> :ok
+end
+```
+
+Outputs follow the same batch barriers and configured execution order as
+change sets. They are discarded after post-tick and are never written to the
+storage backend. Use them to avoid recomputing a bounded derived value during
+the same tick, not as an authoritative resource or historical cache.
 
 ## Component locks and concurrency
 
