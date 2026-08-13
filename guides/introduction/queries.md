@@ -82,6 +82,34 @@ An empty membership list matches nothing.
 Tuple constants, including references and composite identifiers, are escaped
 for Mnesia match specs automatically.
 
+## Restricting reads with candidate sources
+
+Field filters are evaluated after the backend finds entities. Use a candidate
+source when a secondary index can identify a smaller entity set before their
+components are loaded:
+
+```elixir
+source = MyGame.SpatialIndex.circle(room_id, {100, 200}, 500)
+
+query =
+  Query.select({Entity, Player, Position},
+    with: :selected,
+    partition: room_id,
+    source: source
+  )
+
+nearby_players = Query.all(query)
+```
+
+The source struct implements `ElvenGard.ECS.Query.Source` and returns entity
+IDs for the requested partition. Query filters remain authoritative: candidate
+IDs that do not contain every mandatory component or fail a field filter are
+discarded normally.
+
+Sources are resolved when `Query.all/1` or `Query.one/1` executes. Duplicate
+IDs are removed before the backend loads components. A source must only return
+live IDs belonging to the partition it receives.
+
 ## Selecting components
 
 Use a component module as the return type to receive component structs rather

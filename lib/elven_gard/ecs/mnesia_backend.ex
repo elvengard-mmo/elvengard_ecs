@@ -82,6 +82,25 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   @doc "Executes a query description and returns its matching values."
   @spec all(Query.t()) :: [Query.result()]
+  def all(%Query{candidate_ids: candidate_ids} = query) when is_list(candidate_ids) do
+    %Query{
+      return_type: return_type,
+      components: components,
+      mandatories: mandatories,
+      preload_all: preload_all,
+      return_entity: return_entity
+    } = query
+
+    component_selectors = Enum.map(components, &compile_component_selector/1)
+
+    candidate_ids
+    |> Enum.map(&build_entity_struct(&1))
+    |> Enum.map(&fetch_partition_components(&1, component_selectors))
+    |> Enum.filter(&matches_partition_query?(&1, mandatories, return_entity))
+    |> maybe_preload_all(preload_all)
+    |> apply_return_type(return_type)
+  end
+
   def all(%Query{partition: partition} = query) when partition != :any do
     %Query{
       return_type: return_type,
