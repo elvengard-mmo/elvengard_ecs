@@ -22,7 +22,14 @@ defmodule ElvenGard.ECS.System do
   execution batch. Systems with overlapping component locks are serialized.
   Use `:sync` to run a system in an isolated batch. These locks are scheduling
   metadata; they do not open a backend transaction.
+
+  A system that commits ECS mutations can return `emit_changes/1`. Successful
+  change sets remain available in later execution batches and phases through
+  `context.change_sets`. They are scoped to the current tick and discarded
+  after the post-tick phase.
   """
+
+  alias ElvenGard.ECS.ChangeSet
 
   ## Behaviour
 
@@ -35,10 +42,13 @@ defmodule ElvenGard.ECS.System do
   @typedoc "Context passed to every system callback."
   @type context :: %{
           optional(:reason) => any(),
+          change_sets: [ChangeSet.t()],
           partition: any(),
           delta: delta(),
           phase: phase()
         }
+
+  @opaque emitted_changes :: {:elvengard_ecs_system_changes, [ChangeSet.t()]}
 
   @doc "Runs once per partition tick when implemented."
   @callback run(context :: context()) :: any()
@@ -49,6 +59,32 @@ defmodule ElvenGard.ECS.System do
   @optional_callbacks [run: 1, run: 2]
 
   ## Public API
+
+  @doc """
+  Returns a system result that exposes committed changes to later systems in
+  the current tick.
+
+  Empty change sets are ignored by the partition. The ECS never persists or
+  carries emitted changes into another tick.
+  """
+  @spec emit_changes(ChangeSet.t() | [ChangeSet.t()]) :: emitted_changes()
+  def emit_changes(%ChangeSet{} = change_set), do: emit_changes([change_set])
+
+  def emit_changes(change_sets) when is_list(change_sets) do
+    unless Enum.all?(change_sets, &match?(%ChangeSet{}, &1)) do
+      raise ArgumentError, "emit_changes/1 expects a change set or a list of change sets"
+    end
+
+    {:elvengard_ecs_system_changes, change_sets}
+  end
+
+  @doc false
+  @spec emitted_change_sets(any()) :: [ChangeSet.t()]
+  def emitted_change_sets({:elvengard_ecs_system_changes, change_sets}) do
+    Enum.reject(change_sets, &ChangeSet.empty?/1)
+  end
+
+  def emitted_change_sets(_result), do: []
 
   @doc false
   defmacro __using__(opts) do
