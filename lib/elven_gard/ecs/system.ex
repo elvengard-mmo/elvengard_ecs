@@ -26,7 +26,9 @@ defmodule ElvenGard.ECS.System do
   A system that commits ECS mutations can return `emit_changes/1`. Successful
   change sets remain available in later execution batches and phases through
   `context.change_sets`. They are scoped to the current tick and discarded
-  after the post-tick phase.
+  after the post-tick phase. `emit_changes/2` additionally exposes one
+  ephemeral output through `context.outputs`; outputs have the same bounded
+  lifecycle and are never persisted by the ECS.
   """
 
   alias ElvenGard.ECS.ChangeSet
@@ -43,12 +45,15 @@ defmodule ElvenGard.ECS.System do
   @type context :: %{
           optional(:reason) => any(),
           change_sets: [ChangeSet.t()],
+          outputs: [{module(), any()}],
           partition: any(),
           delta: delta(),
           phase: phase()
         }
 
-  @opaque emitted_changes :: {:elvengard_ecs_system_changes, [ChangeSet.t()]}
+  @opaque emitted_changes ::
+            {:elvengard_ecs_system_changes, [ChangeSet.t()]}
+            | {:elvengard_ecs_system_changes, [ChangeSet.t()], any()}
 
   @doc "Runs once per partition tick when implemented."
   @callback run(context :: context()) :: any()
@@ -71,11 +76,36 @@ defmodule ElvenGard.ECS.System do
   def emit_changes(%ChangeSet{} = change_set), do: emit_changes([change_set])
 
   def emit_changes(change_sets) when is_list(change_sets) do
-    unless Enum.all?(change_sets, &match?(%ChangeSet{}, &1)) do
-      raise ArgumentError, "emit_changes/1 expects a change set or a list of change sets"
-    end
+    validate_change_sets!(change_sets)
 
     {:elvengard_ecs_system_changes, change_sets}
+  end
+
+  @doc """
+  Exposes committed changes and one ephemeral output to later systems in the
+  current tick.
+
+  The output is kept only until the post-tick phase completes. It is intended
+  for derived values that a later system can reuse without repeating work; it
+  is not authoritative state and is never persisted or carried between ticks.
+  """
+  @spec emit_changes(ChangeSet.t() | [ChangeSet.t()], any()) :: emitted_changes()
+  def emit_changes(%ChangeSet{} = change_set, output), do: emit_changes([change_set], output)
+
+  def emit_changes(change_sets, output) when is_list(change_sets) do
+    validate_change_sets!(change_sets)
+    {:elvengard_ecs_system_changes, change_sets, output}
+  end
+
+  @doc "Returns the latest current-tick output emitted by a system."
+  @spec output(context(), module()) :: {:ok, any()} | :error
+  def output(%{outputs: outputs}, system) when is_atom(system) do
+    outputs
+    |> Enum.reverse()
+    |> Enum.find_value(:error, fn
+      {^system, output} -> {:ok, output}
+      {_other_system, _output} -> false
+    end)
   end
 
   @doc false
@@ -84,7 +114,16 @@ defmodule ElvenGard.ECS.System do
     Enum.reject(change_sets, &ChangeSet.empty?/1)
   end
 
+  def emitted_change_sets({:elvengard_ecs_system_changes, change_sets, _output}) do
+    Enum.reject(change_sets, &ChangeSet.empty?/1)
+  end
+
   def emitted_change_sets(_result), do: []
+
+  @doc false
+  @spec emitted_output(any()) :: {:ok, any()} | :error
+  def emitted_output({:elvengard_ecs_system_changes, _change_sets, output}), do: {:ok, output}
+  def emitted_output(_result), do: :error
 
   @doc false
   defmacro __using__(opts) do
@@ -110,6 +149,12 @@ defmodule ElvenGard.ECS.System do
   end
 
   ## Private functions
+
+  defp validate_change_sets!(change_sets) do
+    unless Enum.all?(change_sets, &match?(%ChangeSet{}, &1)) do
+      raise ArgumentError, "emit_changes expects a change set or a list of change sets"
+    end
+  end
 
   defp validate_locks(opts) do
     case Keyword.get(opts, :lock_components) do

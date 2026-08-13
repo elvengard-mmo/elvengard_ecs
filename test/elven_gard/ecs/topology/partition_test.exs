@@ -148,6 +148,29 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     end
   end
 
+  defmodule OutputEmittingSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    alias ElvenGard.ECS.System
+
+    @impl true
+    def run(%{partition: test_pid, phase: phase, outputs: outputs}) do
+      send(test_pid, {:visible_outputs, phase, outputs})
+      System.emit_changes([], %{prepared_in: phase})
+    end
+  end
+
+  defmodule OutputObservingSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    alias ElvenGard.ECS.System
+
+    @impl true
+    def run(%{partition: test_pid, phase: phase} = context) do
+      send(test_pid, {:observed_output, phase, System.output(context, OutputEmittingSystem)})
+    end
+  end
+
   defmodule EventRecordingSystem do
     use ElvenGard.ECS.System,
       lock_components: [],
@@ -290,6 +313,30 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
 
     send(partition, :tick)
     assert_receive {:visible_change_sets, :pre_tick, []}
+  end
+
+  test "carries outputs into later phases and drops them after the tick", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         pre_tick_systems: [OutputEmittingSystem],
+         systems: [OutputObservingSystem],
+         post_tick_systems: [OutputObservingSystem],
+         interval: 60_000,
+         concurrency: 3}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    assert_receive {:visible_outputs, :pre_tick, []}
+    assert_receive {:observed_output, :tick, {:ok, %{prepared_in: :pre_tick}}}
+    assert_receive {:observed_output, :post_tick, {:ok, %{prepared_in: :pre_tick}}}
+
+    send(partition, :tick)
+    assert_receive {:visible_outputs, :pre_tick, []}
   end
 
   test "carries event-system changes into later batches and the post-tick phase", %{
@@ -466,6 +513,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
                       duration: phase_duration,
                       event_count: 1,
                       failure_count: 0,
+                      output_count: 0,
                       system_run_count: 1
                     }, %{partition: test_pid, phase: :tick, configured_system_count: 1}}
 
@@ -477,6 +525,7 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
                       duration: tick_duration,
                       event_count: 1,
                       failure_count: 0,
+                      output_count: 0,
                       receipt_count: 0
                     }, %{partition: test_pid}}
 
