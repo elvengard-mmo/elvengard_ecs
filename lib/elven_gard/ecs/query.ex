@@ -14,10 +14,20 @@ defmodule ElvenGard.ECS.Query do
 
   alias __MODULE__
   alias ElvenGard.ECS.{Bundle, Component, Config, Entity}
+  alias ElvenGard.ECS.Query.Source
 
   ## Struct
 
-  defstruct [:return_type, :components, :mandatories, :preload_all, :return_entity, :partition]
+  defstruct [
+    :return_type,
+    :components,
+    :mandatories,
+    :preload_all,
+    :return_entity,
+    :partition,
+    :candidate_source,
+    :candidate_ids
+  ]
 
   @typep component_module :: module()
 
@@ -43,7 +53,9 @@ defmodule ElvenGard.ECS.Query do
           mandatories: [component_module()],
           preload_all: boolean(),
           return_entity: boolean(),
-          partition: :any | Entity.partition()
+          partition: :any | Entity.partition(),
+          candidate_source: Source.t() | nil,
+          candidate_ids: [Entity.id()] | nil
         }
 
   ## General
@@ -66,6 +78,8 @@ defmodule ElvenGard.ECS.Query do
       `:in` operator accepts a list and matches values equal to any member.
     * `:preload` - component modules included with entity results, or `:all`.
     * `:partition` - restricts results to one partition; defaults to `:any`.
+    * `:source` - a `ElvenGard.ECS.Query.Source` struct that supplies candidate
+      entity IDs before components are loaded.
 
   Component modules named in a tuple return type are loaded automatically.
   """
@@ -74,6 +88,7 @@ defmodule ElvenGard.ECS.Query do
     with_components = normalize_with_components(type, Keyword.get(query, :with, []))
     preload = Keyword.get(query, :preload, [])
     partition = Keyword.get(query, :partition, :any)
+    candidate_source = Keyword.get(query, :source)
 
     preload_list =
       case preload do
@@ -117,7 +132,9 @@ defmodule ElvenGard.ECS.Query do
       mandatories: mandatories,
       preload_all: preload == :all,
       return_entity: return_entity,
-      partition: partition
+      partition: partition,
+      candidate_source: candidate_source,
+      candidate_ids: nil
     }
   end
 
@@ -260,6 +277,7 @@ defmodule ElvenGard.ECS.Query do
 
   defp execute_all(query, bundle_module) do
     backend = Config.backend()
+    query = resolve_candidate_source(query)
 
     metadata = %{
       backend: backend,
@@ -269,14 +287,34 @@ defmodule ElvenGard.ECS.Query do
       component_modules: Enum.map(query.components, &component_module/1),
       mandatory_component_modules: query.mandatories,
       preload_all: query.preload_all,
+      candidate_source: candidate_source_module(query.candidate_source),
       into: bundle_module
     }
 
     :telemetry.span([:elvengard_ecs, :query], metadata, fn ->
       results = backend.all(query)
-      {results, %{result_count: length(results)}, metadata}
+
+      measurements = %{
+        result_count: length(results),
+        candidate_count: candidate_count(query.candidate_ids)
+      }
+
+      {results, measurements, metadata}
     end)
   end
+
+  defp resolve_candidate_source(%Query{candidate_source: nil} = query), do: query
+
+  defp resolve_candidate_source(%Query{} = query) do
+    candidate_ids = Source.resolve(query.candidate_source, query.partition)
+    %{query | candidate_ids: candidate_ids}
+  end
+
+  defp candidate_source_module(nil), do: nil
+  defp candidate_source_module(%module{}), do: module
+
+  defp candidate_count(nil), do: 0
+  defp candidate_count(candidate_ids), do: length(candidate_ids)
 
   defp one_result(results) do
     case results do

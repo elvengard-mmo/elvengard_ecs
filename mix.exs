@@ -98,7 +98,8 @@ defmodule ElvenGard.ECS.MixProject do
         ElvenGard.ECS.ChangeSet,
         ElvenGard.ECS.Command,
         ElvenGard.ECS.Multi,
-        ElvenGard.ECS.Query
+        ElvenGard.ECS.Query,
+        ElvenGard.ECS.Query.Source
       ],
       Topology: [
         ElvenGard.ECS.Event,

@@ -2,11 +2,62 @@ defmodule ElvenGard.ECS.QueryTest do
   use ElvenGard.ECS.EntityCase, async: true
 
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
-  alias ElvenGard.ECS.{Entity, Query}
+  alias ElvenGard.ECS.{Entity, Query, StaticQuerySource}
 
   ## General
 
   describe "select/2 + all/1" do
+    test "candidate sources restrict component reads before materialization" do
+      partition = make_ref()
+
+      selected =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, {PositionComponent, map_id: :selected}]
+        )
+
+      filtered =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, {PositionComponent, map_id: :filtered}]
+        )
+
+      _not_loaded =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, {PositionComponent, map_id: :selected}]
+        )
+
+      source = %StaticQuerySource{ids: [selected.id, filtered.id, selected.id], notify: self()}
+
+      query =
+        Query.select(
+          {Entity, PlayerComponent, PositionComponent},
+          with: [
+            PlayerComponent,
+            {PositionComponent, [{:==, :map_id, :selected}]}
+          ],
+          partition: partition,
+          source: source
+        )
+
+      refute_received {:query_source_resolved, _partition}
+
+      assert Query.all(query) == [
+               {selected, %PlayerComponent{}, %PositionComponent{map_id: :selected}}
+             ]
+
+      assert_received {:query_source_resolved, ^partition}
+    end
+
+    test "candidate sources must return an ID list" do
+      query = Query.select(Entity, source: %StaticQuerySource{ids: :invalid})
+
+      assert_raise ArgumentError, ~r/query source returned invalid candidate IDs/, fn ->
+        Query.all(query)
+      end
+    end
+
     test "emits bounded query telemetry without result payloads" do
       partition = make_ref()
       entity = spawn_entity(partition: partition)
