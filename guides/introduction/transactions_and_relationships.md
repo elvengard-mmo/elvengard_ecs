@@ -148,6 +148,26 @@ end
 Command.despawn_entity(entity, on_child_delete)
 ```
 
+When an authoritative query already loaded every component attached to an
+entity, pass that set directly to avoid reading it again during deletion:
+
+```elixir
+{:ok, {deleted_entity, deleted_components}} =
+  Command.despawn_preloaded_entity(entity, components)
+
+multi =
+  Multi.despawn_preloaded_entity(
+    Multi.new(),
+    :projectile,
+    entity,
+    components
+  )
+```
+
+The component list must be complete. The command deletes each represented
+component type directly, preserves recursive child handling, and reports the
+same `:despawn_entity` mutation in a tracked `ChangeSet`.
+
 Returning `:ignore` keeps the child and its descendants. It does not rewrite
 the child's parent automatically, so reparent a retained child when the
 application requires a valid parent reference.

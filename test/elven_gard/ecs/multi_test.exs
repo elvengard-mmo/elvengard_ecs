@@ -177,6 +177,24 @@ defmodule ElvenGard.ECS.MultiTest do
     assert Query.fetch_component(entity, PositionComponent) == {:error, :not_found}
   end
 
+  test "despawns from preloaded components and tracks the entity mutation" do
+    entity = spawn_entity(components: [PositionComponent])
+    {:ok, components} = Query.list_components(entity)
+
+    multi =
+      Multi.new()
+      |> Multi.despawn_preloaded_entity(:despawn, entity, components)
+
+    assert {:ok, %{despawn: {^entity, ^components}}, changes} =
+             Command.transact_with_changes(multi)
+
+    assert ChangeSet.to_list(changes) == [
+             {:despawn, {:despawn_entity, entity, components}}
+           ]
+
+    assert Query.fetch_entity(entity.id) == {:error, :not_found}
+  end
+
   test "merges dependent multis dynamically" do
     entity = spawn_entity()
 

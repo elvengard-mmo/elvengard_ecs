@@ -29,6 +29,8 @@ defmodule ElvenGard.ECS.Multi do
   @typep operation ::
            {:spawn_entity, value_or_fun()}
            | {:despawn_entity, value_or_fun(), (ElvenGard.ECS.Entity.t(), [struct()] -> any())}
+           | {:despawn_preloaded_entity, value_or_fun(), value_or_fun(),
+              (ElvenGard.ECS.Entity.t(), [struct()] -> any())}
            | {:set_parent, value_or_fun(), value_or_fun()}
            | {:set_partition, value_or_fun(), value_or_fun()}
            | {:add_component, value_or_fun(), value_or_fun()}
@@ -68,6 +70,28 @@ defmodule ElvenGard.ECS.Multi do
         on_child_delete \\ fn _entity, _components -> :delete end
       ) do
     add_operation(multi, name, {:despawn_entity, entity, on_child_delete})
+  end
+
+  @doc "Adds a despawn command using the entity's complete preloaded component set."
+  @spec despawn_preloaded_entity(
+          t(),
+          name(),
+          value_or_fun(),
+          value_or_fun(),
+          (ElvenGard.ECS.Entity.t(), [struct()] -> :delete | :ignore)
+        ) :: t()
+  def despawn_preloaded_entity(
+        %Multi{} = multi,
+        name,
+        entity,
+        components,
+        on_child_delete \\ fn _entity, _components -> :delete end
+      ) do
+    add_operation(
+      multi,
+      name,
+      {:despawn_preloaded_entity, entity, components, on_child_delete}
+    )
   end
 
   @doc "Adds a direct-parent update."

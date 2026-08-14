@@ -102,6 +102,29 @@ defmodule ElvenGard.ECS.Command do
   end
 
   @doc """
+  Deletes an entity from a complete component set already loaded by the caller.
+
+  This preserves the regular recursive child behavior while avoiding another
+  backend lookup for the root entity's components. `components` must contain
+  every component attached to `entity`; use this only when that complete set is
+  already part of the authoritative query result.
+  """
+  @spec despawn_preloaded_entity(
+          Entity.t(),
+          [Component.t()],
+          (Entity.t(), [Component.t()] -> :delete | :ignore)
+        ) :: {:ok, {Entity.t(), [Component.t()]}} | {:error, any()}
+  def despawn_preloaded_entity(
+        %Entity{} = entity,
+        components,
+        on_child_delete \\ fn _, _ -> :delete end
+      )
+      when is_list(components) do
+    fn -> do_despawn_preloaded_entity(entity, components, on_child_delete) end
+    |> transaction()
+  end
+
+  @doc """
   Sets or clears the direct parent of an entity.
 
   Returns `{:error, :cyclic_relationship}` when the relationship would make
@@ -295,6 +318,22 @@ defmodule ElvenGard.ECS.Command do
     end
   end
 
+  defp execute_multi_operation(
+         {:despawn_preloaded_entity, entity, components, on_child_delete},
+         changes
+       ) do
+    entity = resolve_multi_value(entity, changes)
+    components = resolve_multi_value(components, changes)
+
+    case despawn_preloaded_entity(entity, components, on_child_delete) do
+      {:ok, {deleted_entity, deleted_components} = result} ->
+        {:ok, result, {:despawn_entity, deleted_entity, deleted_components}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
   defp execute_multi_operation({:set_parent, entity, parent}, changes) do
     entity = resolve_multi_value(entity, changes)
     parent = resolve_multi_value(parent, changes)
@@ -412,6 +451,28 @@ defmodule ElvenGard.ECS.Command do
   end
 
   defp do_despawn_entity(entity, on_child_delete) do
+    despawn_children(entity, on_child_delete)
+
+    {:ok, components} = Config.backend().delete_components_for(entity)
+    :ok = Config.backend().delete_entity(entity)
+
+    {entity, components}
+  end
+
+  defp do_despawn_preloaded_entity(entity, components, on_child_delete) do
+    despawn_children(entity, on_child_delete)
+
+    components
+    |> Enum.map(& &1.__struct__)
+    |> Enum.uniq()
+    |> Enum.each(&Config.backend().delete_component(entity, &1))
+
+    :ok = Config.backend().delete_entity(entity)
+
+    {entity, components}
+  end
+
+  defp despawn_children(entity, on_child_delete) do
     entity
     |> Query.children()
     |> then(&unwrap/1)
@@ -420,17 +481,12 @@ defmodule ElvenGard.ECS.Command do
       {tuple, on_child_delete.(entity, components)}
     end)
     |> Enum.each(&maybe_despawn_child(&1, on_child_delete))
-
-    {:ok, components} = Config.backend().delete_components_for(entity)
-    :ok = Config.backend().delete_entity(entity)
-
-    {entity, components}
   end
 
   defp maybe_despawn_child({_tuple, :ignore}, _on_child_delete), do: :ok
 
-  defp maybe_despawn_child({{entity, _components}, :delete}, on_child_delete) do
-    do_despawn_entity(entity, on_child_delete)
+  defp maybe_despawn_child({{entity, components}, :delete}, on_child_delete) do
+    do_despawn_preloaded_entity(entity, components, on_child_delete)
   end
 
   defp maybe_despawn_child({tuple, value}, _on_child_delete) do

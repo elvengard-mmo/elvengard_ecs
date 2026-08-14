@@ -114,6 +114,30 @@ defmodule ElvenGard.ECS.CommandTest do
       assert {:error, :not_found} = Query.fetch_entity(entity.id)
     end
 
+    test "with a complete preloaded component set" do
+      entity =
+        spawn_entity(
+          Entity.entity_spec(
+            components: [
+              PlayerComponent,
+              {PositionComponent, [map_id: 42]},
+              {BuffComponent, [buff_id: 12]},
+              {BuffComponent, [buff_id: 34]}
+            ]
+          )
+        )
+
+      {:ok, components} = Query.list_components(entity)
+
+      assert {:ok, {^entity, ^components}} =
+               Command.despawn_preloaded_entity(entity, components)
+
+      assert {:error, :not_found} = Query.fetch_entity(entity.id)
+      assert {:error, :not_found} = Query.fetch_component(entity, PlayerComponent)
+      assert {:error, :not_found} = Query.fetch_component(entity, PositionComponent)
+      assert {:ok, []} = Query.fetch_components(entity, BuffComponent)
+    end
+
     test "with children on delete (default behaviour)" do
       # Spawn dummy Entities
       parent = spawn_entity(Entity.entity_spec())
@@ -171,6 +195,19 @@ defmodule ElvenGard.ECS.CommandTest do
 
       assert_received {:despawn, ^entity2, []}
       assert_received {:despawn, ^entity3, []}
+    end
+
+    test "preloaded despawn keeps recursive child semantics" do
+      parent = spawn_entity(components: [PlayerComponent])
+      child = spawn_entity(parent: parent, components: [PositionComponent])
+      {:ok, components} = Query.list_components(parent)
+
+      assert {:ok, {^parent, ^components}} =
+               Command.despawn_preloaded_entity(parent, components)
+
+      assert {:error, :not_found} = Query.fetch_entity(parent.id)
+      assert {:error, :not_found} = Query.fetch_entity(child.id)
+      assert {:error, :not_found} = Query.fetch_component(child, PositionComponent)
     end
 
     test "rolls back the cascade when a child callback crashes" do
