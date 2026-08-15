@@ -20,6 +20,11 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   component module, and the component struct. The component table is a bag, so
   one entity may own multiple distinct values of the same component module.
 
+  Changed-component queries use separate, opt-in revision tables. They retain
+  one current revision per partition and one current membership/revision row
+  per entity and component module, never component history. Partitions that do
+  not use a cursor or membership cache keep the original component write path.
+
   Partition-scoped queries start from the entity partition index and fetch
   components only for those owners. Their component lookup cost therefore
   scales with the selected partition instead of the global component table.
@@ -33,8 +38,12 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   import Record
 
   alias ElvenGard.ECS.{Component, Entity, Query}
+  alias ElvenGard.ECS.MnesiaBackend.{ComponentRevision, Revision}
 
   @timeout 5000
+  @entity_tracking_context {__MODULE__, :entity_tracking_context}
+  @tracking_table ElvenGard.ECS.MnesiaBackend.RevisionTracking
+  @component_attributes [:composite_key, :owner_id, :type, :component]
 
   ## Public API
 
@@ -65,10 +74,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
         {:ok, query.()}
 
       false ->
-        case :mnesia.transaction(query) do
-          {:atomic, result} -> {:ok, result}
-          {:aborted, reason} -> {:error, reason}
-        end
+        execute_transaction(query)
     end
   end
 
@@ -99,6 +105,23 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> Enum.filter(&matches_partition_query?(&1, mandatories, return_entity))
     |> maybe_preload_all(preload_all)
     |> apply_return_type(return_type)
+  end
+
+  def all(
+        %Query{
+          partition: partition,
+          mandatories: [first_mandatory | _rest],
+          cache_membership: true
+        } = query
+      )
+      when partition != :any do
+    candidate_ids =
+      ComponentRevision
+      |> index_read({partition, first_mandatory}, :scope)
+      |> Enum.map(&component_revision(&1, :owner_id))
+      |> Enum.uniq()
+
+    all(%{query | candidate_ids: candidate_ids})
   end
 
   def all(%Query{partition: partition} = query) when partition != :any do
@@ -161,6 +184,28 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     |> apply_return_type(return_type)
   end
 
+  @doc "Returns the current bounded component revision for one partition."
+  @spec current_revision(Entity.partition()) :: non_neg_integer()
+  def current_revision(partition) do
+    case revision_tracking?(partition) do
+      true -> read_current_revision(partition)
+      false -> start_revision_tracking(partition)
+    end
+  end
+
+  @doc "Returns entity IDs whose selected components changed after `since_revision`."
+  @spec changed_entity_ids(Entity.partition(), [module()], non_neg_integer()) :: [Entity.id()]
+  def changed_entity_ids(partition, component_modules, since_revision) do
+    component_modules
+    |> Enum.flat_map(fn component_module ->
+      ComponentRevision
+      |> index_read({partition, component_module}, :scope)
+      |> Enum.filter(&(component_revision(&1, :revision) > since_revision))
+      |> Enum.map(&component_revision(&1, :owner_id))
+    end)
+    |> Enum.uniq()
+  end
+
   ### Entities
 
   @doc """
@@ -209,9 +254,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     entity = entity(id: id, parent_id: parent_id(parent), partition: partition)
 
     case insert_new(entity) do
-      :ok -> {:ok, build_entity_struct(id)}
-      {:error, :already_exists} = error -> error
-      {:error, :cyclic_relationship} = error -> error
+      :ok ->
+        track_entity_partition(id, partition)
+        {:ok, build_entity_struct(id)}
+
+      {:error, :already_exists} = error ->
+        error
+
+      {:error, :cyclic_relationship} = error ->
+        error
     end
   end
 
@@ -288,7 +339,9 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc "Deletes an entity record without deleting its components."
   @spec delete_entity(Entity.t()) :: :ok
   def delete_entity(%Entity{id: id}) do
-    delete({Entity, id})
+    :ok = delete({Entity, id})
+    delete_entity_tracking(id)
+    :ok
   end
 
   ### Components
@@ -296,35 +349,47 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc "Adds a component value to an entity."
   @spec add_component(Entity.t(), Component.spec() | Component.t()) :: {:ok, Component.t()}
   def add_component(%Entity{id: id}, %component_mod{} = component) do
-    component(
-      composite_key: {id, component_mod},
-      owner_id: id,
-      type: component_mod,
-      component: component
-    )
-    |> insert()
+    case {tracked_entity_partition(id), :mnesia.is_transaction()} do
+      {partition, false} when not is_nil(partition) ->
+        transaction(fn -> do_add_component(id, partition, component_mod, component) end)
+        |> unwrap()
 
-    {:ok, component}
+      {partition, true} when not is_nil(partition) ->
+        do_add_component(id, partition, component_mod, component)
+
+      {nil, _transaction?} ->
+        insert_component(id, component_mod, component)
+    end
   end
 
   def add_component(entity, component_spec) do
     add_component(entity, Component.spec_to_struct(component_spec))
   end
 
+  defp do_add_component(id, partition, component_mod, component_value) do
+    composite_key = {id, component_mod}
+
+    duplicate? =
+      {Component, composite_key}
+      |> read()
+      |> Enum.any?(&(component(&1, :component) == component_value))
+
+    unless duplicate? do
+      insert_component(id, component_mod, component_value)
+      track_component_change(partition, id, component_mod)
+    end
+
+    {:ok, component_value}
+  end
+
   @doc "Replaces every component of the same module with one component value."
   @spec replace_component(Entity.t(), Component.t()) :: :ok
   def replace_component(%Entity{id: owner_id}, %component_mod{} = component) do
-    record =
-      component(
-        composite_key: {owner_id, component_mod},
-        owner_id: owner_id,
-        type: component_mod,
-        component: component
-      )
+    partition = tracked_entity_partition(owner_id)
 
     case :mnesia.is_transaction() do
-      true -> do_replace_component(record)
-      false -> replace_component_in_transaction(record)
+      true -> do_replace_component(owner_id, partition, component_mod, component)
+      false -> replace_component_in_transaction(owner_id, partition, component_mod, component)
     end
   end
 
@@ -335,14 +400,30 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   values equal to that struct.
   """
   @spec delete_component(Entity.t(), module() | Component.t()) :: :ok
-  def delete_component(%Entity{id: id}, component) when is_atom(component) do
-    delete({Component, {id, component}})
+  def delete_component(%Entity{id: owner_id}, component_mod) when is_atom(component_mod) do
+    partition = tracked_entity_partition(owner_id)
+
+    case {partition, :mnesia.is_transaction()} do
+      {partition, false} when not is_nil(partition) ->
+        {:ok, :ok} =
+          transaction(fn -> do_delete_component_type(partition, owner_id, component_mod) end)
+
+        :ok
+
+      {partition, true} when not is_nil(partition) ->
+        do_delete_component_type(partition, owner_id, component_mod)
+
+      {nil, _transaction?} ->
+        delete({Component, {owner_id, component_mod}})
+    end
   end
 
   def delete_component(%Entity{id: owner_id}, %component_mod{} = component) do
+    partition = tracked_entity_partition(owner_id)
+
     case :mnesia.is_transaction() do
-      true -> do_delete_component(owner_id, component_mod, component)
-      false -> delete_component_in_transaction(owner_id, component_mod, component)
+      true -> do_delete_component(owner_id, partition, component_mod, component)
+      false -> delete_component_in_transaction(owner_id, partition, component_mod, component)
     end
   end
 
@@ -354,12 +435,18 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @spec update_component(Entity.t(), module() | Component.t(), Keyword.t()) ::
           {:ok, Component.t()} | {:error, :not_found | :multiple_values}
   def update_component(%Entity{id: owner_id}, %component_mod{} = component, attrs) do
-    update_component(owner_id, component_mod, component, attrs)
+    update_component(
+      owner_id,
+      tracked_entity_partition(owner_id),
+      component_mod,
+      component,
+      attrs
+    )
   end
 
   def update_component(%Entity{id: owner_id}, component_mod, attrs)
       when is_atom(component_mod) do
-    update_component(owner_id, component_mod, :all, attrs)
+    update_component(owner_id, tracked_entity_partition(owner_id), component_mod, :all, attrs)
   end
 
   @doc "Lists every component owned by an entity."
@@ -387,6 +474,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   def delete_components_for(%Entity{id: owner_id}) do
     components = index_read(Component, owner_id, :owner_id)
     Enum.each(components, &delete_object(&1))
+    partition = tracked_entity_partition(owner_id)
+
+    unless is_nil(partition) do
+      components
+      |> Enum.map(&component(&1, :type))
+      |> Enum.uniq()
+      |> Enum.each(&delete_component_revision(partition, owner_id, &1))
+    end
+
     {:ok, Enum.map(components, &component(&1, :component))}
   end
 
@@ -407,11 +503,28 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       create_table(
         Component,
         type: :bag,
-        attributes: [:composite_key, :owner_id, :type, :component],
+        attributes: @component_attributes,
         index: [:owner_id, :type]
       )
 
-    :ok = :mnesia.wait_for_tables([Entity, Component], @timeout)
+    :ok =
+      create_table(
+        Revision,
+        type: :set,
+        attributes: [:partition, :revision]
+      )
+
+    :ok =
+      create_table(
+        ComponentRevision,
+        type: :set,
+        attributes: [:composite_key, :scope, :owner_id, :revision],
+        index: [:scope, :owner_id]
+      )
+
+    :ok = :mnesia.wait_for_tables([Entity, Component, Revision, ComponentRevision], @timeout)
+    :ok = migrate_component_table()
+    :ok = initialize_tracking_table()
   end
 
   ## Private Helpers
@@ -496,54 +609,103 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  defp delete_component_in_transaction(owner_id, component_mod, component) do
+  defp insert_component(owner_id, component_mod, component_value) do
+    component(
+      composite_key: {owner_id, component_mod},
+      owner_id: owner_id,
+      type: component_mod,
+      component: component_value
+    )
+    |> insert()
+
+    {:ok, component_value}
+  end
+
+  defp delete_component_in_transaction(owner_id, partition, component_mod, component) do
     {:atomic, :ok} =
       :mnesia.transaction(fn ->
-        do_delete_component(owner_id, component_mod, component)
+        do_delete_component(owner_id, partition, component_mod, component)
       end)
 
     :ok
   end
 
-  defp do_delete_component(owner_id, component_mod, selected_component) do
-    {Component, {owner_id, component_mod}}
-    |> :mnesia.wread()
+  defp do_delete_component(owner_id, partition, component_mod, selected_component) do
+    records = :mnesia.wread({Component, {owner_id, component_mod}})
+
+    records
     |> Enum.filter(&(component(&1, :component) == selected_component))
     |> Enum.each(&:mnesia.delete_object/1)
-  end
 
-  defp replace_component_in_transaction(record) do
-    {:atomic, :ok} = :mnesia.transaction(fn -> do_replace_component(record) end)
+    unless is_nil(partition) do
+      case Enum.reject(records, &(component(&1, :component) == selected_component)) do
+        [] -> delete_component_revision(partition, owner_id, component_mod)
+        _remaining -> track_component_change(partition, owner_id, component_mod)
+      end
+    end
+
     :ok
   end
 
-  defp do_replace_component(record) do
-    composite_key = component(record, :composite_key)
-    :ok = :mnesia.delete({Component, composite_key})
-    :mnesia.write(record)
+  defp do_delete_component_type(partition, owner_id, component_mod) do
+    :ok = delete({Component, {owner_id, component_mod}})
+    delete_component_revision(partition, owner_id, component_mod)
   end
 
-  defp update_component(owner_id, component_mod, selector, attrs) do
+  defp replace_component_in_transaction(owner_id, partition, component_mod, component_value) do
+    {:ok, :ok} =
+      transaction(fn ->
+        do_replace_component(owner_id, partition, component_mod, component_value)
+      end)
+
+    :ok
+  end
+
+  defp do_replace_component(owner_id, partition, component_mod, component_value) do
+    composite_key = {owner_id, component_mod}
+
+    record =
+      component(
+        composite_key: composite_key,
+        owner_id: owner_id,
+        type: component_mod,
+        component: component_value
+      )
+
+    :ok = :mnesia.delete({Component, composite_key})
+    :ok = :mnesia.write(record)
+
+    unless is_nil(partition) do
+      track_component_change(partition, owner_id, component_mod)
+    end
+
+    :ok
+  end
+
+  defp update_component(owner_id, partition, component_mod, selector, attrs) do
     case :mnesia.is_transaction() do
-      true -> do_update_component(owner_id, component_mod, selector, attrs)
-      false -> update_component_in_transaction(owner_id, component_mod, selector, attrs)
+      true ->
+        do_update_component(owner_id, partition, component_mod, selector, attrs)
+
+      false ->
+        update_component_in_transaction(owner_id, partition, component_mod, selector, attrs)
     end
   end
 
-  defp update_component_in_transaction(owner_id, component_mod, selector, attrs) do
-    {:atomic, result} =
-      :mnesia.transaction(fn ->
-        do_update_component(owner_id, component_mod, selector, attrs)
+  defp update_component_in_transaction(owner_id, partition, component_mod, selector, attrs) do
+    {:ok, result} =
+      transaction(fn ->
+        do_update_component(owner_id, partition, component_mod, selector, attrs)
       end)
 
     result
   end
 
-  defp do_update_component(owner_id, component_mod, selector, attrs) do
+  defp do_update_component(owner_id, partition, component_mod, selector, attrs) do
     {Component, {owner_id, component_mod}}
     |> :mnesia.wread()
     |> select_component_records(selector)
-    |> replace_component_record(attrs)
+    |> replace_component_record(partition, attrs)
   end
 
   defp select_component_records(records, selector) do
@@ -553,7 +715,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     end
   end
 
-  defp replace_component_record(records, attrs) do
+  defp replace_component_record(records, partition, attrs) do
     case records do
       [] ->
         {:error, :not_found}
@@ -562,6 +724,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
         :ok = :mnesia.delete_object(record)
         updated_component = record |> component(:component) |> struct!(attrs)
         :ok = record |> component(component: updated_component) |> :mnesia.write()
+
+        unless is_nil(partition) do
+          owner_id = component(record, :owner_id)
+          component_mod = component(record, :type)
+          track_component_change(partition, owner_id, component_mod)
+        end
+
         {:ok, updated_component}
 
       _ ->
@@ -577,7 +746,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp update_entity_in_transaction(id, field, value) do
-    {:atomic, result} = :mnesia.transaction(fn -> do_update_entity(id, field, value) end)
+    {:ok, result} = transaction(fn -> do_update_entity(id, field, value) end)
     result
   end
 
@@ -591,7 +760,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp update_entity_record(record, id, field, value) do
     case field do
       :parent_id -> update_entity_parent(record, id, value)
-      :partition -> record |> entity(partition: value) |> :mnesia.write()
+      :partition -> update_entity_partition(record, id, value)
     end
   end
 
@@ -654,6 +823,36 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     case ensure_acyclic_parent(id, entity(record, :parent_id)) do
       :ok -> :mnesia.write(record)
       {:error, :cyclic_relationship} -> :mnesia.abort(:cyclic_relationship)
+    end
+  end
+
+  defp update_entity_partition(record, entity_id, partition) do
+    previous_partition = entity(record, :partition)
+
+    if previous_partition == partition do
+      :mnesia.write(record)
+    else
+      component_modules =
+        Component
+        |> :mnesia.index_read(entity_id, :owner_id)
+        |> Enum.map(&component(&1, :type))
+        |> Enum.uniq()
+
+      if revision_tracking?(previous_partition) do
+        Enum.each(
+          component_modules,
+          &delete_component_revision(previous_partition, entity_id, &1)
+        )
+      end
+
+      :ok = record |> entity(partition: partition) |> :mnesia.write()
+      move_entity_tracking(entity_id, partition)
+
+      if revision_tracking?(partition) do
+        Enum.each(component_modules, &track_component_change(partition, entity_id, &1))
+      end
+
+      :ok
     end
   end
 
@@ -757,6 +956,279 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp component_filter_guard({op, field, value}, source) do
     {op, {:map_get, field, source}, escape_match_spec_constant(value)}
+  end
+
+  defp tracked_entity_partition(owner_id) do
+    if tracking_enabled?() do
+      case pending_entity_partition(owner_id) do
+        {:ok, partition} -> partition
+        :error -> persisted_tracked_entity_partition(owner_id)
+      end
+    end
+  end
+
+  defp persisted_tracked_entity_partition(owner_id) do
+    case :ets.lookup(@tracking_table, {:entity, owner_id}) do
+      [{{:entity, ^owner_id}, partition}] -> partition
+      [] -> maybe_load_tracked_entity_partition(owner_id)
+    end
+  end
+
+  defp pending_entity_partition(owner_id) do
+    case Process.get(@entity_tracking_context) do
+      partitions when is_map(partitions) -> Map.fetch(partitions, owner_id)
+      nil -> :error
+    end
+  end
+
+  defp maybe_load_tracked_entity_partition(owner_id) do
+    case read({Entity, owner_id}) do
+      [{Entity, ^owner_id, _parent_id, partition}] ->
+        track_entity_partition(owner_id, partition)
+
+      [] ->
+        nil
+    end
+  end
+
+  defp track_entity_partition(owner_id, partition) do
+    if revision_tracking?(partition) do
+      put_entity_tracking(owner_id, partition)
+      partition
+    end
+  end
+
+  defp move_entity_tracking(owner_id, partition) do
+    tracked_partition = if revision_tracking?(partition), do: partition
+    put_entity_tracking(owner_id, tracked_partition)
+  end
+
+  defp delete_entity_tracking(owner_id) do
+    put_entity_tracking(owner_id, nil)
+  end
+
+  defp put_entity_tracking(owner_id, partition) do
+    case :mnesia.is_transaction() do
+      true ->
+        partitions = Process.get(@entity_tracking_context, %{})
+        Process.put(@entity_tracking_context, Map.put(partitions, owner_id, partition))
+
+      false ->
+        persist_entity_tracking(owner_id, partition)
+    end
+  end
+
+  defp persist_entity_tracking(owner_id, nil) do
+    :ets.delete(@tracking_table, {:entity, owner_id})
+  end
+
+  defp persist_entity_tracking(owner_id, partition) do
+    true = :ets.insert(@tracking_table, {{:entity, owner_id}, partition})
+    :ok
+  end
+
+  defp next_revision(partition) do
+    case :mnesia.is_transaction() do
+      true -> locked_next_revision(partition)
+      false -> next_revision_in_transaction(partition)
+    end
+  end
+
+  defp locked_next_revision(partition) do
+    case :mnesia.wread({Revision, partition}) do
+      [record] ->
+        value = revision(record, :revision) + 1
+        :ok = record |> revision(revision: value) |> :mnesia.write()
+        value
+
+      [] ->
+        raise "revision tracking is enabled without a partition revision"
+    end
+  end
+
+  defp next_revision_in_transaction(partition) do
+    {:atomic, value} = :mnesia.transaction(fn -> locked_next_revision(partition) end)
+    value
+  end
+
+  defp enable_revision_tracking(partition) do
+    case :mnesia.wread({Revision, partition}) do
+      [] ->
+        :ok = :mnesia.write(revision(partition: partition, revision: 0))
+        0
+
+      [record] ->
+        revision(record, :revision)
+    end
+  end
+
+  defp revision_tracking?(partition) do
+    :ets.member(@tracking_table, {:partition, partition})
+  end
+
+  defp tracking_enabled?() do
+    :ets.member(@tracking_table, :tracking_enabled)
+  end
+
+  defp read_current_revision(partition) do
+    [record] = read({Revision, partition})
+    revision(record, :revision)
+  end
+
+  defp start_revision_tracking(partition) do
+    if :mnesia.is_transaction() do
+      raise ArgumentError,
+            "revision tracking must be enabled before entering a backend transaction"
+    end
+
+    {:ok, _initial_revision} = transaction(fn -> enable_revision_tracking(partition) end)
+
+    true =
+      :ets.insert(@tracking_table, [
+        {:tracking_enabled},
+        {{:partition, partition}},
+        {{:activating, partition}}
+      ])
+
+    {:ok, value} =
+      transaction(fn ->
+        value = next_revision(partition)
+        seed_component_revisions(partition, value)
+        value
+      end)
+
+    track_partition_entities(partition)
+    :ets.delete(@tracking_table, {:activating, partition})
+    value
+  end
+
+  defp with_transaction_context(function) do
+    previous_entities = Process.get(@entity_tracking_context)
+
+    try do
+      function.()
+    after
+      restore_context(@entity_tracking_context, previous_entities)
+    end
+  end
+
+  defp restore_context(key, nil), do: Process.delete(key)
+  defp restore_context(key, previous), do: Process.put(key, previous)
+
+  defp execute_transaction(query) do
+    case tracking_enabled?() do
+      true -> with_transaction_context(fn -> query |> transact() |> commit_entity_tracking() end)
+      false -> transact(query)
+    end
+  end
+
+  defp commit_entity_tracking({:ok, _result} = transaction_result) do
+    @entity_tracking_context
+    |> Process.get(%{})
+    |> Enum.each(fn {owner_id, partition} -> persist_entity_tracking(owner_id, partition) end)
+
+    transaction_result
+  end
+
+  defp commit_entity_tracking({:error, _reason} = transaction_result), do: transaction_result
+
+  defp transact(query) do
+    case :mnesia.transaction(query) do
+      {:atomic, result} -> {:ok, result}
+      {:aborted, reason} -> {:error, reason}
+    end
+  end
+
+  defp migrate_component_table() do
+    case :mnesia.table_info(Component, :attributes) do
+      @component_attributes ->
+        :ok
+
+      [:composite_key, :owner_id, :type, :component, :scope, :revision] ->
+        _result = :mnesia.del_table_index(Component, :scope)
+
+        transform = fn {Component, composite_key, owner_id, type, component_value, _scope,
+                        _revision} ->
+          {Component, composite_key, owner_id, type, component_value}
+        end
+
+        case :mnesia.transform_table(Component, transform, @component_attributes) do
+          {:atomic, :ok} -> :ok
+          {:aborted, reason} -> raise "component table migration failed: #{inspect(reason)}"
+        end
+
+      attributes ->
+        raise "unsupported component table attributes: #{inspect(attributes)}"
+    end
+  end
+
+  defp initialize_tracking_table() do
+    case :ets.whereis(@tracking_table) do
+      :undefined ->
+        _table = :ets.new(@tracking_table, [:named_table, :public, read_concurrency: true])
+
+      _reference ->
+        :ets.delete_all_objects(@tracking_table)
+    end
+
+    Revision
+    |> :mnesia.dirty_all_keys()
+    |> Enum.each(fn partition ->
+      true = :ets.insert(@tracking_table, [{:tracking_enabled}, {{:partition, partition}}])
+      track_partition_entities(partition)
+    end)
+
+    :ok
+  end
+
+  defp seed_component_revisions(partition, revision_value) do
+    Entity
+    |> :mnesia.index_read(partition, :partition)
+    |> Enum.each(fn entity_record ->
+      owner_id = entity(entity_record, :id)
+
+      Component
+      |> :mnesia.index_read(owner_id, :owner_id)
+      |> Enum.map(&component(&1, :type))
+      |> Enum.uniq()
+      |> Enum.each(&write_component_revision(partition, owner_id, &1, revision_value))
+    end)
+
+    :ok
+  end
+
+  defp track_partition_entities(partition) do
+    partition
+    |> then(&:mnesia.dirty_index_read(Entity, &1, :partition))
+    |> Enum.each(fn entity_record ->
+      owner_id = entity(entity_record, :id)
+      true = :ets.insert(@tracking_table, {{:entity, owner_id}, partition})
+    end)
+
+    :ok
+  end
+
+  defp track_component_change(partition, owner_id, component_mod) do
+    if revision_tracking?(partition) do
+      write_component_revision(partition, owner_id, component_mod, next_revision(partition))
+    end
+
+    :ok
+  end
+
+  defp write_component_revision(partition, owner_id, component_mod, revision_value) do
+    :mnesia.write(
+      component_revision(
+        composite_key: {partition, component_mod, owner_id},
+        scope: {partition, component_mod},
+        owner_id: owner_id,
+        revision: revision_value
+      )
+    )
+  end
+
+  defp delete_component_revision(partition, owner_id, component_mod) do
+    delete({ComponentRevision, {partition, component_mod, owner_id}})
   end
 
   defp apply_return_type(tuples, Entity) do

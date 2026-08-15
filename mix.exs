@@ -99,6 +99,7 @@ defmodule ElvenGard.ECS.MixProject do
         ElvenGard.ECS.Command,
         ElvenGard.ECS.Multi,
         ElvenGard.ECS.Query,
+        ElvenGard.ECS.Query.Cursor,
         ElvenGard.ECS.Query.Source
       ],
       Topology: [

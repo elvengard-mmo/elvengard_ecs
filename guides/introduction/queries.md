@@ -110,6 +110,45 @@ Sources are resolved when `Query.all/1` or `Query.one/1` executes. Duplicate
 IDs are removed before the backend loads components. A source must only return
 live IDs belonging to the partition it receives.
 
+## Changed components and membership caches
+
+Capture a bounded partition cursor, then select only the existing entities
+whose selected component modules were written after it:
+
+```elixir
+cursor = Query.cursor(room_id)
+
+changed_players =
+  {Entity, Position, Movement}
+  |> Query.select(
+    with: :selected,
+    partition: room_id,
+    changed: [Position, Movement],
+    since: cursor
+  )
+  |> Query.all()
+```
+
+The default Mnesia backend retains only the current revision for each
+entity/component pair. A cursor therefore has bounded storage: it is suitable
+for incremental systems, but it is not an event log. Use the transaction's
+`ElvenGard.ECS.ChangeSet` when a system must observe deletions.
+
+For stable sparse queries, `cache: true` starts candidate selection from the
+first mandatory component's membership index:
+
+```elixir
+projectiles =
+  {Entity, Projectile, Position}
+  |> Query.select(with: :selected, partition: room_id, cache: true)
+  |> Query.all()
+```
+
+The cache is opt-in because scanning a dense component membership can cost
+more than starting from the partition's entity index. Enabling either a cursor
+or a membership cache seeds that partition once from authoritative ECS data;
+subsequent writes maintain the bounded index transactionally.
+
 ## Selecting components
 
 Use a component module as the return type to receive component structs rather

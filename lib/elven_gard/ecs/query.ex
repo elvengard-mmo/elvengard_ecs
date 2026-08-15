@@ -14,7 +14,7 @@ defmodule ElvenGard.ECS.Query do
 
   alias __MODULE__
   alias ElvenGard.ECS.{Bundle, Component, Config, Entity}
-  alias ElvenGard.ECS.Query.Source
+  alias ElvenGard.ECS.Query.{Cursor, Source}
 
   ## Struct
 
@@ -26,7 +26,10 @@ defmodule ElvenGard.ECS.Query do
     :return_entity,
     :partition,
     :candidate_source,
-    :candidate_ids
+    :candidate_ids,
+    :changed_components,
+    :since_revision,
+    :cache_membership
   ]
 
   @typep component_module :: module()
@@ -55,7 +58,10 @@ defmodule ElvenGard.ECS.Query do
           return_entity: boolean(),
           partition: :any | Entity.partition(),
           candidate_source: Source.t() | nil,
-          candidate_ids: [Entity.id()] | nil
+          candidate_ids: [Entity.id()] | nil,
+          changed_components: [component_module()],
+          since_revision: non_neg_integer() | nil,
+          cache_membership: boolean()
         }
 
   ## General
@@ -80,6 +86,14 @@ defmodule ElvenGard.ECS.Query do
     * `:partition` - restricts results to one partition; defaults to `:any`.
     * `:source` - a `ElvenGard.ECS.Query.Source` struct that supplies candidate
       entity IDs before components are loaded.
+    * `:changed` - component modules that must have changed after the `:since`
+      cursor. The query must target the cursor partition.
+    * `:since` - a cursor returned by `cursor/1`. Only the latest revision on
+      each existing component is retained; deletions remain available through
+      transaction-scoped `ElvenGard.ECS.ChangeSet` values.
+    * `:cache` - when `true`, starts a partition query from its first mandatory
+      component's membership index. Use it for stable sparse queries; dense or
+      ad-hoc queries default to the partition entity index.
 
   Component modules named in a tuple return type are loaded automatically.
   """
@@ -89,6 +103,10 @@ defmodule ElvenGard.ECS.Query do
     preload = Keyword.get(query, :preload, [])
     partition = Keyword.get(query, :partition, :any)
     candidate_source = Keyword.get(query, :source)
+    changed_components = Keyword.get(query, :changed, [])
+
+    since_revision =
+      validate_change_cursor(partition, changed_components, Keyword.get(query, :since))
 
     preload_list =
       case preload do
@@ -134,8 +152,17 @@ defmodule ElvenGard.ECS.Query do
       return_entity: return_entity,
       partition: partition,
       candidate_source: candidate_source,
-      candidate_ids: nil
+      candidate_ids: nil,
+      changed_components: changed_components,
+      since_revision: since_revision,
+      cache_membership: Keyword.get(query, :cache, false)
     }
+  end
+
+  @doc "Captures the current bounded component revision for one partition."
+  @spec cursor(Entity.partition()) :: Cursor.t()
+  def cursor(partition) do
+    %Cursor{partition: partition, revision: Config.backend().current_revision(partition)}
   end
 
   @doc "Executes a query and returns all matching results."
@@ -277,7 +304,12 @@ defmodule ElvenGard.ECS.Query do
 
   defp execute_all(query, bundle_module) do
     backend = Config.backend()
-    query = resolve_candidate_source(query)
+
+    query =
+      query
+      |> prepare_membership_cache(backend)
+      |> resolve_candidate_source()
+      |> resolve_changed_candidates(backend)
 
     metadata = %{
       backend: backend,
@@ -286,7 +318,9 @@ defmodule ElvenGard.ECS.Query do
       return_type: query.return_type,
       component_modules: Enum.map(query.components, &component_module/1),
       mandatory_component_modules: query.mandatories,
+      changed_component_modules: query.changed_components,
       preload_all: query.preload_all,
+      cache_membership: query.cache_membership,
       candidate_source: candidate_source_module(query.candidate_source),
       into: bundle_module
     }
@@ -315,6 +349,38 @@ defmodule ElvenGard.ECS.Query do
 
   defp candidate_count(nil), do: 0
   defp candidate_count(candidate_ids), do: length(candidate_ids)
+
+  defp prepare_membership_cache(%Query{cache_membership: false} = query, _backend), do: query
+
+  defp prepare_membership_cache(%Query{partition: :any}, _backend) do
+    raise ArgumentError, "membership caching requires one partition"
+  end
+
+  defp prepare_membership_cache(%Query{} = query, backend) do
+    _revision = backend.current_revision(query.partition)
+    query
+  end
+
+  defp resolve_changed_candidates(%Query{changed_components: []} = query, _backend), do: query
+
+  defp resolve_changed_candidates(%Query{} = query, backend) do
+    changed_ids =
+      backend.changed_entity_ids(
+        query.partition,
+        query.changed_components,
+        query.since_revision
+      )
+
+    candidate_ids = intersect_candidate_ids(query.candidate_ids, changed_ids)
+    %{query | candidate_ids: candidate_ids}
+  end
+
+  defp intersect_candidate_ids(nil, changed_ids), do: changed_ids
+
+  defp intersect_candidate_ids(candidate_ids, changed_ids) do
+    changed = MapSet.new(changed_ids)
+    Enum.filter(candidate_ids, &MapSet.member?(changed, &1))
+  end
 
   defp one_result(results) do
     case results do
@@ -353,4 +419,24 @@ defmodule ElvenGard.ECS.Query do
 
   defp component_module({module, _attrs}) when is_atom(module), do: module
   defp component_module(module) when is_atom(module), do: module
+
+  defp validate_change_cursor(_partition, [], nil), do: nil
+
+  defp validate_change_cursor(_partition, [], %Cursor{}) do
+    raise ArgumentError, ":since requires at least one component in :changed"
+  end
+
+  defp validate_change_cursor(_partition, changed_components, nil)
+       when changed_components != [] do
+    raise ArgumentError, ":changed requires a cursor in :since"
+  end
+
+  defp validate_change_cursor(partition, changed_components, %Cursor{} = cursor)
+       when is_list(changed_components) do
+    if cursor.partition != partition do
+      raise ArgumentError, "change cursor belongs to another partition"
+    end
+
+    cursor.revision
+  end
 end
