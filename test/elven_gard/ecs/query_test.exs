@@ -79,6 +79,36 @@ defmodule ElvenGard.ECS.QueryTest do
       end
     end
 
+    test "rejects a cursor when no changed component is selected" do
+      cursor = Query.cursor(make_ref())
+
+      assert_raise ArgumentError, ":since requires at least one component in :changed", fn ->
+        Query.select(Entity, partition: cursor.partition, since: cursor)
+      end
+    end
+
+    test "requires a cursor for changed-component selection" do
+      assert_raise ArgumentError, ":changed requires a cursor in :since", fn ->
+        Query.select(Entity, partition: make_ref(), changed: [PositionComponent])
+      end
+    end
+
+    test "rejects membership caching across all partitions" do
+      query = Query.select(PositionComponent, partition: :any, cache: true)
+
+      assert_raise ArgumentError, "membership caching requires one partition", fn ->
+        Query.all(query)
+      end
+    end
+
+    test "treats an entity-only membership cache as an ordinary partition query" do
+      partition = make_ref()
+      entity = spawn_entity(partition: partition)
+      query = Query.select(Entity, with: :selected, partition: partition, cache: true)
+
+      assert Query.all(query) == [{entity, []}]
+    end
+
     test "tracks every component written by one transaction" do
       partition = make_ref()
       before_cursor = Query.cursor(partition)
@@ -132,6 +162,47 @@ defmodule ElvenGard.ECS.QueryTest do
         |> Enum.to_list()
 
       assert Enum.all?(results, &match?({:ok, true}, &1))
+    end
+
+    test "serializes concurrent first cursors for the same partition" do
+      partition = make_ref()
+
+      Enum.each(1..100, fn _index ->
+        _entity = spawn_entity(partition: partition, components: [PositionComponent])
+      end)
+
+      cursors =
+        1..16
+        |> Task.async_stream(fn _index -> Query.cursor(partition) end,
+          max_concurrency: 8,
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, cursor} -> cursor end)
+
+      assert cursors |> Enum.map(& &1.revision) |> Enum.uniq() |> length() == 1
+
+      changed = spawn_entity(partition: partition, components: [PositionComponent])
+
+      Enum.each(cursors, fn cursor ->
+        query =
+          Query.select({Entity, PositionComponent},
+            with: :selected,
+            partition: partition,
+            changed: [PositionComponent],
+            since: cursor
+          )
+
+        assert Query.all(query) == [{changed, %PositionComponent{}}]
+      end)
+    end
+
+    test "requires revision tracking to be enabled before a transaction" do
+      assert {:error, {%ArgumentError{} = exception, _stacktrace}} =
+               Command.transaction(fn -> Query.cursor(make_ref()) end)
+
+      assert Exception.message(exception) =~
+               "revision tracking must be enabled before entering a backend transaction"
     end
 
     test "does not retain tracked membership from an aborted entity transaction" do
@@ -223,6 +294,145 @@ defmodule ElvenGard.ECS.QueryTest do
 
       assert :ok = Command.delete_component(first, PositionComponent)
       assert Query.all(query) == [{second, %PositionComponent{}}]
+    end
+
+    test "maintains independent membership caches for multiple component modules" do
+      partition = make_ref()
+
+      first =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, PositionComponent]
+        )
+
+      second = spawn_entity(partition: partition, components: [PositionComponent])
+
+      player_query =
+        Query.select({Entity, PlayerComponent},
+          with: :selected,
+          partition: partition,
+          cache: true
+        )
+
+      position_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          cache: true
+        )
+
+      assert Query.all(player_query) == [{first, %PlayerComponent{}}]
+
+      assert Enum.sort(Query.all(position_query)) ==
+               Enum.sort([{first, %PositionComponent{}}, {second, %PositionComponent{}}])
+
+      assert {:ok, %PlayerComponent{}} = Command.add_component(second, PlayerComponent)
+      assert :ok = Command.delete_component(first, PositionComponent)
+
+      assert Enum.sort(Query.all(player_query)) ==
+               Enum.sort([{first, %PlayerComponent{}}, {second, %PlayerComponent{}}])
+
+      assert Query.all(position_query) == [{second, %PositionComponent{}}]
+    end
+
+    test "keeps membership caches correct when an entity changes partition" do
+      first_partition = make_ref()
+      second_partition = make_ref()
+      entity = spawn_entity(partition: first_partition, components: [PositionComponent])
+
+      first_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: first_partition,
+          cache: true
+        )
+
+      second_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: second_partition,
+          cache: true
+        )
+
+      assert Query.all(first_query) == [{entity, %PositionComponent{}}]
+      assert Query.all(second_query) == []
+      assert :ok = Command.set_partition(entity, second_partition)
+      assert Query.all(first_query) == []
+      assert Query.all(second_query) == [{entity, %PositionComponent{}}]
+    end
+
+    test "supports concurrent first access to the same membership cache" do
+      partition = make_ref()
+
+      expected_entities =
+        Enum.map(1..100, fn _index ->
+          spawn_entity(partition: partition, components: [PositionComponent])
+        end)
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          cache: true
+        )
+
+      expected = Enum.map(expected_entities, &{&1, %PositionComponent{}})
+
+      results =
+        1..16
+        |> Task.async_stream(fn _index -> Query.all(query) end,
+          max_concurrency: 8,
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Enum.to_list()
+
+      assert Enum.all?(results, fn {:ok, entities} ->
+               Enum.sort(entities) == Enum.sort(expected)
+             end)
+    end
+
+    test "requires membership caching to be enabled before a transaction" do
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: make_ref(),
+          cache: true
+        )
+
+      assert {:error, {%ArgumentError{} = exception, _stacktrace}} =
+               Command.transaction(fn -> Query.all(query) end)
+
+      assert Exception.message(exception) =~
+               "membership caching must be enabled before entering a backend transaction"
+    end
+
+    test "upgrades a membership-only cache to changed-component cursors" do
+      partition = make_ref()
+      entity = spawn_entity(partition: partition, components: [PositionComponent])
+
+      membership_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          cache: true
+        )
+
+      assert Query.all(membership_query) == [{entity, %PositionComponent{}}]
+      cursor = Query.cursor(partition)
+
+      assert {:ok, %PositionComponent{pos_x: 42}} =
+               Command.update_component(entity, PositionComponent, pos_x: 42)
+
+      changed_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          changed: [PositionComponent],
+          since: cursor
+        )
+
+      assert Query.all(changed_query) == [{entity, %PositionComponent{pos_x: 42}}]
     end
 
     test "maintains tracked membership across every component mutation command" do
