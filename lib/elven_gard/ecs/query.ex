@@ -356,10 +356,16 @@ defmodule ElvenGard.ECS.Query do
     raise ArgumentError, "membership caching requires one partition"
   end
 
-  defp prepare_membership_cache(%Query{} = query, backend) do
-    _revision = backend.current_revision(query.partition)
+  defp prepare_membership_cache(%Query{mandatories: [component | _rest]} = query, backend) do
+    case function_exported?(backend, :cache_component_membership, 2) do
+      true -> :ok = backend.cache_component_membership(query.partition, component)
+      false -> _revision = backend.current_revision(query.partition)
+    end
+
     query
   end
+
+  defp prepare_membership_cache(%Query{} = query, _backend), do: query
 
   defp resolve_changed_candidates(%Query{changed_components: []} = query, _backend), do: query
 

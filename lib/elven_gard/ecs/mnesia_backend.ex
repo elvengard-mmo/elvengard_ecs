@@ -22,8 +22,10 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   Changed-component queries use separate, opt-in revision tables. They retain
   one current revision per partition and one current membership/revision row
-  per entity and component module, never component history. Partitions that do
-  not use a cursor or membership cache keep the original component write path.
+  per entity and component module, never component history. Membership-only
+  caches track just their selected component modules without incrementing a
+  partition revision for unrelated writes. Partitions that use neither feature
+  keep the original component write path.
 
   Partition-scoped queries start from the entity partition index and fetch
   components only for those owners. Their component lookup cost therefore
@@ -187,9 +189,37 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   @doc "Returns the current bounded component revision for one partition."
   @spec current_revision(Entity.partition()) :: non_neg_integer()
   def current_revision(partition) do
-    case revision_tracking?(partition) do
-      true -> read_current_revision(partition)
-      false -> start_revision_tracking(partition)
+    key = {:revision, partition}
+
+    case :ets.lookup(@tracking_table, key) do
+      [{^key, :ready}] -> read_current_revision(partition)
+      [{^key, {:activating, _owner}}] -> await_revision_tracking(key, partition)
+      [] -> start_revision_tracking(key, partition)
+    end
+  end
+
+  @doc "Seeds and maintains one bounded component membership for a partition."
+  @spec cache_component_membership(Entity.partition(), module()) :: :ok
+  def cache_component_membership(partition, component_module) when is_atom(component_module) do
+    key = {:membership, partition, component_module}
+    revision_key = {:revision, partition}
+
+    case {:ets.lookup(@tracking_table, revision_key), :ets.lookup(@tracking_table, key)} do
+      {[{^revision_key, :ready}], _membership_state} ->
+        :ok
+
+      {[{^revision_key, {:activating, _owner}}], _membership_state} ->
+        _revision = await_revision_tracking(revision_key, partition)
+        :ok
+
+      {[], [{^key, :ready}]} ->
+        :ok
+
+      {[], [{^key, {:activating, _owner}}]} ->
+        await_membership_tracking(key, partition, component_module)
+
+      {[], []} ->
+        start_membership_tracking(partition, component_module)
     end
   end
 
@@ -838,7 +868,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
         |> Enum.map(&component(&1, :type))
         |> Enum.uniq()
 
-      if revision_tracking?(previous_partition) do
+      if partition_tracking?(previous_partition) do
         Enum.each(
           component_modules,
           &delete_component_revision(previous_partition, entity_id, &1)
@@ -848,9 +878,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       :ok = record |> entity(partition: partition) |> :mnesia.write()
       move_entity_tracking(entity_id, partition)
 
-      if revision_tracking?(partition) do
-        Enum.each(component_modules, &track_component_change(partition, entity_id, &1))
-      end
+      Enum.each(component_modules, &track_component_change(partition, entity_id, &1))
 
       :ok
     end
@@ -969,15 +997,28 @@ defmodule ElvenGard.ECS.MnesiaBackend do
 
   defp persisted_tracked_entity_partition(owner_id) do
     case :ets.lookup(@tracking_table, {:entity, owner_id}) do
-      [{{:entity, ^owner_id}, partition}] -> partition
-      [] -> maybe_load_tracked_entity_partition(owner_id)
+      [{{:entity, ^owner_id}, partition}] ->
+        partition
+
+      [] ->
+        case :ets.member(@tracking_table, {:untracked_entity, owner_id}) do
+          true -> nil
+          false -> maybe_load_tracked_entity_partition(owner_id)
+        end
     end
   end
 
   defp pending_entity_partition(owner_id) do
     case Process.get(@entity_tracking_context) do
-      partitions when is_map(partitions) -> Map.fetch(partitions, owner_id)
-      nil -> :error
+      partitions when is_map(partitions) ->
+        case Map.fetch(partitions, owner_id) do
+          {:ok, {:partition, partition}} -> {:ok, partition}
+          {:ok, :deleted} -> {:ok, nil}
+          :error -> :error
+        end
+
+      nil ->
+        :error
     end
   end
 
@@ -992,38 +1033,56 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp track_entity_partition(owner_id, partition) do
-    if revision_tracking?(partition) do
-      put_entity_tracking(owner_id, partition)
-      partition
+    if tracking_enabled?() do
+      tracked_partition = if partition_tracking?(partition), do: partition
+      put_entity_tracking(owner_id, tracked_partition)
+      tracked_partition
     end
   end
 
   defp move_entity_tracking(owner_id, partition) do
-    tracked_partition = if revision_tracking?(partition), do: partition
-    put_entity_tracking(owner_id, tracked_partition)
-  end
-
-  defp delete_entity_tracking(owner_id) do
-    put_entity_tracking(owner_id, nil)
-  end
-
-  defp put_entity_tracking(owner_id, partition) do
-    case :mnesia.is_transaction() do
-      true ->
-        partitions = Process.get(@entity_tracking_context, %{})
-        Process.put(@entity_tracking_context, Map.put(partitions, owner_id, partition))
-
-      false ->
-        persist_entity_tracking(owner_id, partition)
+    if tracking_enabled?() do
+      tracked_partition = if partition_tracking?(partition), do: partition
+      put_entity_tracking(owner_id, tracked_partition)
     end
   end
 
-  defp persist_entity_tracking(owner_id, nil) do
-    :ets.delete(@tracking_table, {:entity, owner_id})
+  defp delete_entity_tracking(owner_id) do
+    if tracking_enabled?() do
+      put_entity_tracking_status(owner_id, :deleted)
+    end
   end
 
-  defp persist_entity_tracking(owner_id, partition) do
+  defp put_entity_tracking(owner_id, partition) do
+    put_entity_tracking_status(owner_id, {:partition, partition})
+  end
+
+  defp put_entity_tracking_status(owner_id, status) do
+    case :mnesia.is_transaction() do
+      true ->
+        partitions = Process.get(@entity_tracking_context, %{})
+        Process.put(@entity_tracking_context, Map.put(partitions, owner_id, status))
+
+      false ->
+        persist_entity_tracking_status(owner_id, status)
+    end
+  end
+
+  defp persist_entity_tracking_status(owner_id, {:partition, nil}) do
+    :ets.delete(@tracking_table, {:entity, owner_id})
+    true = :ets.insert(@tracking_table, {{:untracked_entity, owner_id}})
+    :ok
+  end
+
+  defp persist_entity_tracking_status(owner_id, {:partition, partition}) do
+    :ets.delete(@tracking_table, {:untracked_entity, owner_id})
     true = :ets.insert(@tracking_table, {{:entity, owner_id}, partition})
+    :ok
+  end
+
+  defp persist_entity_tracking_status(owner_id, :deleted) do
+    :ets.delete(@tracking_table, {:entity, owner_id})
+    :ets.delete(@tracking_table, {:untracked_entity, owner_id})
     :ok
   end
 
@@ -1066,6 +1125,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     :ets.member(@tracking_table, {:partition, partition})
   end
 
+  defp membership_tracking?(partition, component_module) do
+    :ets.member(@tracking_table, {:membership, partition, component_module})
+  end
+
+  defp partition_tracking?(partition) do
+    revision_tracking?(partition) or
+      :ets.member(@tracking_table, {:membership_partition, partition})
+  end
+
   defp tracking_enabled?() do
     :ets.member(@tracking_table, :tracking_enabled)
   end
@@ -1075,19 +1143,25 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     revision(record, :revision)
   end
 
-  defp start_revision_tracking(partition) do
+  defp start_revision_tracking(key, partition) do
     if :mnesia.is_transaction() do
       raise ArgumentError,
             "revision tracking must be enabled before entering a backend transaction"
     end
 
+    case :ets.insert_new(@tracking_table, {key, {:activating, self()}}) do
+      true -> activate_revision_tracking(key, partition)
+      false -> await_revision_tracking(key, partition)
+    end
+  end
+
+  defp activate_revision_tracking(key, partition) do
     {:ok, _initial_revision} = transaction(fn -> enable_revision_tracking(partition) end)
 
     true =
       :ets.insert(@tracking_table, [
         {:tracking_enabled},
-        {{:partition, partition}},
-        {{:activating, partition}}
+        {{:partition, partition}}
       ])
 
     {:ok, value} =
@@ -1098,8 +1172,98 @@ defmodule ElvenGard.ECS.MnesiaBackend do
       end)
 
     track_partition_entities(partition)
-    :ets.delete(@tracking_table, {:activating, partition})
+    true = :ets.insert(@tracking_table, {key, :ready})
     value
+  catch
+    kind, payload ->
+      :ets.delete(@tracking_table, key)
+      :ets.delete(@tracking_table, {:partition, partition})
+      :erlang.raise(kind, payload, __STACKTRACE__)
+  end
+
+  defp await_revision_tracking(key, partition) do
+    case :ets.lookup(@tracking_table, key) do
+      [{^key, :ready}] ->
+        read_current_revision(partition)
+
+      [{^key, {:activating, owner}}] ->
+        monitor = Process.monitor(owner)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^owner, _reason} ->
+            :ets.delete_object(@tracking_table, {key, {:activating, owner}})
+            start_revision_tracking(key, partition)
+        after
+          1 ->
+            Process.demonitor(monitor, [:flush])
+            await_revision_tracking(key, partition)
+        end
+
+      [] ->
+        start_revision_tracking(key, partition)
+    end
+  end
+
+  defp start_membership_tracking(partition, component_module) do
+    if :mnesia.is_transaction() do
+      raise ArgumentError,
+            "membership caching must be enabled before entering a backend transaction"
+    end
+
+    key = {:membership, partition, component_module}
+    true = :ets.insert(@tracking_table, {:tracking_enabled})
+
+    case :ets.insert_new(@tracking_table, {key, {:activating, self()}}) do
+      true -> activate_membership_tracking(key, partition, component_module)
+      false -> await_membership_tracking(key, partition, component_module)
+    end
+  end
+
+  defp activate_membership_tracking(key, partition, component_module) do
+    true = :ets.insert(@tracking_table, {{:membership_partition, partition}})
+
+    {:ok, :ok} = transaction(fn -> seed_component_membership(partition, component_module) end)
+    track_partition_entities(partition)
+    true = :ets.insert(@tracking_table, {key, :ready})
+    :ok
+  catch
+    kind, payload ->
+      :ets.delete(@tracking_table, key)
+      cleanup_membership_partition(partition)
+      :erlang.raise(kind, payload, __STACKTRACE__)
+  end
+
+  defp await_membership_tracking(key, partition, component_module) do
+    case :ets.lookup(@tracking_table, key) do
+      [{^key, :ready}] ->
+        :ok
+
+      [{^key, {:activating, owner}}] ->
+        monitor = Process.monitor(owner)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^owner, _reason} ->
+            :ets.delete_object(@tracking_table, {key, {:activating, owner}})
+            start_membership_tracking(partition, component_module)
+        after
+          1 ->
+            Process.demonitor(monitor, [:flush])
+            await_membership_tracking(key, partition, component_module)
+        end
+
+      [] ->
+        start_membership_tracking(partition, component_module)
+    end
+  end
+
+  defp cleanup_membership_partition(partition) do
+    watchers = :ets.match_object(@tracking_table, {{:membership, partition, :_}, :_})
+
+    if watchers == [] and not revision_tracking?(partition) do
+      :ets.delete(@tracking_table, {:membership_partition, partition})
+    end
+
+    :ok
   end
 
   defp with_transaction_context(function) do
@@ -1125,7 +1289,7 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   defp commit_entity_tracking({:ok, _result} = transaction_result) do
     @entity_tracking_context
     |> Process.get(%{})
-    |> Enum.each(fn {owner_id, partition} -> persist_entity_tracking(owner_id, partition) end)
+    |> Enum.each(fn {owner_id, status} -> persist_entity_tracking_status(owner_id, status) end)
 
     transaction_result
   end
@@ -1174,7 +1338,13 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     Revision
     |> :mnesia.dirty_all_keys()
     |> Enum.each(fn partition ->
-      true = :ets.insert(@tracking_table, [{:tracking_enabled}, {{:partition, partition}}])
+      true =
+        :ets.insert(@tracking_table, [
+          {:tracking_enabled},
+          {{:partition, partition}},
+          {{:revision, partition}, :ready}
+        ])
+
       track_partition_entities(partition)
     end)
 
@@ -1197,11 +1367,31 @@ defmodule ElvenGard.ECS.MnesiaBackend do
     :ok
   end
 
+  defp seed_component_membership(partition, component_module) do
+    ComponentRevision
+    |> :mnesia.index_read({partition, component_module}, :scope)
+    |> Enum.each(&:mnesia.delete_object/1)
+
+    Entity
+    |> :mnesia.index_read(partition, :partition)
+    |> Enum.each(fn entity_record ->
+      owner_id = entity(entity_record, :id)
+
+      case :mnesia.read({Component, {owner_id, component_module}}) do
+        [] -> :ok
+        _components -> write_component_revision(partition, owner_id, component_module, 0)
+      end
+    end)
+
+    :ok
+  end
+
   defp track_partition_entities(partition) do
     partition
     |> then(&:mnesia.dirty_index_read(Entity, &1, :partition))
     |> Enum.each(fn entity_record ->
       owner_id = entity(entity_record, :id)
+      :ets.delete(@tracking_table, {:untracked_entity, owner_id})
       true = :ets.insert(@tracking_table, {{:entity, owner_id}, partition})
     end)
 
@@ -1209,8 +1399,15 @@ defmodule ElvenGard.ECS.MnesiaBackend do
   end
 
   defp track_component_change(partition, owner_id, component_mod) do
-    if revision_tracking?(partition) do
-      write_component_revision(partition, owner_id, component_mod, next_revision(partition))
+    cond do
+      revision_tracking?(partition) ->
+        write_component_revision(partition, owner_id, component_mod, next_revision(partition))
+
+      membership_tracking?(partition, component_mod) ->
+        write_component_revision(partition, owner_id, component_mod, 0)
+
+      true ->
+        :ok
     end
 
     :ok

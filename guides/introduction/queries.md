@@ -145,9 +145,14 @@ projectiles =
 ```
 
 The cache is opt-in because scanning a dense component membership can cost
-more than starting from the partition's entity index. Enabling either a cursor
-or a membership cache seeds that partition once from authoritative ECS data;
-subsequent writes maintain the bounded index transactionally.
+more than starting from the partition's entity index. A membership cache seeds
+only the first mandatory component from authoritative ECS data, then maintains
+that bounded membership transactionally. Writes to unrelated component modules
+do not increment a revision or update the cached membership. A change cursor
+separately enables revision tracking for every component module in its
+partition. Capture the first cursor or execute the first cached query before
+entering a command transaction; once initialized, both query modes remain
+available inside transactions.
 
 ## Selecting components
 
