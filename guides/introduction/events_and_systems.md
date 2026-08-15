@@ -49,6 +49,37 @@ The callback context contains:
 The phase is one of `:startup`, `:pre_tick`, `:tick`, `:post_tick`, or
 `:shutdown`. Startup systems receive `delta: :startup`.
 
+## Conditional and on-demand systems
+
+Use a condition module when a frame system only has work for some ticks. The
+module implements `run?/1` and receives the same bounded tick context that the
+system will receive:
+
+```elixir
+defmodule MyGame.HasChanges do
+  def run?(%{change_sets: change_sets}), do: change_sets != []
+end
+
+defmodule MyGame.ReplicationSystem do
+  use ElvenGard.ECS.System,
+    lock_components: :sync,
+    run_if: MyGame.HasChanges
+end
+```
+
+Partitions configured with `tick_mode: :on_demand` sleep until an event or an
+explicit `ElvenGard.ECS.Topology.Partition.wake/1`. A system keeps temporal
+simulation active by returning the earliest delay it needs:
+
+```elixir
+ElvenGard.ECS.System.schedule_after(33, result)
+```
+
+Scheduling wraps an existing result, including `emit_changes/1` and
+`emit_changes/2`; committed changes and ephemeral outputs remain visible to
+later systems. The partition retains only the earliest requested deadline and
+does not persist a timer history.
+
 ## Propagate committed changes through one tick
 
 A system can expose its committed transaction to later systems without keeping
@@ -139,6 +170,8 @@ The `:systems` option is required. Other options are:
     gracefully;
   * `:interval` - milliseconds between scheduled ticks; use `0` to run without
     an intentional delay;
+  * `:tick_mode` - `:continuous` or `:on_demand`;
+  * `:initial_tick` - whether an on-demand partition runs once after startup;
   * `:concurrency` - maximum systems running in one batch;
   * `:event_source` - source name or PID;
   * `:system_timeout` - execution timeout, defaulting to `:infinity`.

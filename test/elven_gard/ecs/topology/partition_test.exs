@@ -33,6 +33,8 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
         post_tick_systems: Keyword.get(opts, :post_tick_systems, []),
         shutdown_systems: Keyword.get(opts, :shutdown_systems, []),
         interval: Keyword.get(opts, :interval, 1),
+        tick_mode: Keyword.get(opts, :tick_mode, :continuous),
+        initial_tick: Keyword.get(opts, :initial_tick, true),
         concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
       ]
 
@@ -287,6 +289,78 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
     assert_receive {:phase_run, second_phase}
     assert_receive {:phase_run, third_phase}
     assert [first_phase, second_phase, third_phase] == [:pre_tick, :tick, :post_tick]
+  end
+
+  test "wakes an on-demand partition as soon as an event arrives", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [EventRecordingSystem],
+         tick_mode: :on_demand,
+         initial_tick: false}
+      )
+
+    assert Partition.started?(partition)
+    GenServer.cast(partition, {:events, [%Test1Event{id: 41}]})
+
+    assert_receive {:event_processed, 41}
+  end
+
+  test "sleeps an on-demand partition until a system deadline or explicit wake", %{source: source} do
+    counter = :atomics.new(1, [])
+
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: {self(), counter},
+         event_source: source,
+         systems: [ElvenGard.ECS.OnDemandSchedulingSystem],
+         tick_mode: :on_demand,
+         initial_tick: false}
+      )
+
+    assert Partition.started?(partition)
+    refute_receive {:on_demand_tick, _count}, 30
+
+    assert :ok = Partition.wake(partition)
+    assert_receive {:on_demand_tick, 1}
+    assert_receive {:on_demand_tick, 2}
+    refute_receive {:on_demand_tick, _count}, 30
+  end
+
+  test "runs a conditional system only after its condition becomes true", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         pre_tick_systems: [ChangeEmittingSystem],
+         systems: [ElvenGard.ECS.ConditionalSystem],
+         interval: 60_000}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    assert_receive {:conditional_system_ran, :tick}
+  end
+
+  test "skips a conditional system when its condition remains false", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [ElvenGard.ECS.ConditionalSystem],
+         interval: 60_000}
+      )
+
+    assert Partition.started?(partition)
+    send(partition, :tick)
+
+    refute_receive {:conditional_system_ran, :tick}, 30
   end
 
   test "carries emitted change sets into later phases and drops them after the tick", %{

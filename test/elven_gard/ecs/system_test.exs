@@ -37,4 +37,23 @@ defmodule ElvenGard.ECS.SystemTest do
     assert System.output(context, OtherSystem) == {:ok, :latest}
     assert System.output(context, MissingSystem) == :error
   end
+
+  test "preserves emitted changes and output inside a scheduling request" do
+    change_set =
+      ChangeSet.new()
+      |> ChangeSet.add(:scheduled, {:set_parent, %ElvenGard.ECS.Entity{id: 1}, nil})
+
+    result = System.schedule_after(25, System.emit_changes(change_set, :prepared))
+
+    assert System.scheduled_after(result) == 25
+    assert System.emitted_change_sets(result) == [change_set]
+    assert System.emitted_output(result) == {:ok, :prepared}
+  end
+
+  test "evaluates module run conditions against the current system context" do
+    context = %{change_sets: [], outputs: [], partition: :test, delta: 1, phase: :tick}
+
+    refute System.run?(ElvenGard.ECS.ConditionalSystem, context)
+    assert System.run?(ElvenGard.ECS.ConditionalSystem, %{context | change_sets: [:changed]})
+  end
 end
