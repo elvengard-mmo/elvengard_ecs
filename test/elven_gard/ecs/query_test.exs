@@ -1,12 +1,263 @@
 defmodule ElvenGard.ECS.QueryTest do
   use ElvenGard.ECS.EntityCase, async: true
 
+  alias ElvenGard.ECS.{Command, Entity, Query, StaticQuerySource}
   alias ElvenGard.ECS.Components.{BuffComponent, PlayerComponent, PositionComponent}
-  alias ElvenGard.ECS.{Entity, Query, StaticQuerySource}
 
   ## General
 
   describe "select/2 + all/1" do
+    test "selects only components changed after a bounded partition cursor" do
+      partition = make_ref()
+      unchanged = spawn_entity(partition: partition, components: [PositionComponent])
+      cursor = Query.cursor(partition)
+      changed = spawn_entity(partition: partition, components: [PositionComponent])
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          changed: [PositionComponent],
+          since: cursor
+        )
+
+      assert Query.all(query) == [{changed, %PositionComponent{}}]
+      refute Enum.any?(Query.all(query), &(elem(&1, 0) == unchanged))
+    end
+
+    test "change cursors ignore writes to unrelated component modules" do
+      partition = make_ref()
+
+      entity =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, PositionComponent]
+        )
+
+      cursor = Query.cursor(partition)
+
+      assert {:ok, %PlayerComponent{}} =
+               Command.update_component(entity, PlayerComponent, name: "changed")
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          changed: [PositionComponent],
+          since: cursor
+        )
+
+      assert Query.all(query) == []
+    end
+
+    test "changed candidates intersect an explicit query source" do
+      partition = make_ref()
+      cursor = Query.cursor(partition)
+      selected = spawn_entity(partition: partition, components: [PositionComponent])
+      _excluded = spawn_entity(partition: partition, components: [PositionComponent])
+      source = %StaticQuerySource{ids: [selected.id]}
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          changed: [PositionComponent],
+          since: cursor,
+          source: source
+        )
+
+      assert Query.all(query) == [{selected, %PositionComponent{}}]
+    end
+
+    test "rejects a change cursor created for another partition" do
+      cursor = Query.cursor(make_ref())
+
+      assert_raise ArgumentError, ~r/change cursor belongs to another partition/, fn ->
+        Entity
+        |> Query.select(partition: make_ref(), changed: [PositionComponent], since: cursor)
+        |> Query.all()
+      end
+    end
+
+    test "tracks every component written by one transaction" do
+      partition = make_ref()
+      before_cursor = Query.cursor(partition)
+
+      _entity =
+        spawn_entity(
+          partition: partition,
+          components: [PlayerComponent, PositionComponent, BuffComponent]
+        )
+
+      after_cursor = Query.cursor(partition)
+      assert after_cursor.revision > before_cursor.revision
+
+      for component_module <- [PlayerComponent, PositionComponent, BuffComponent] do
+        query =
+          Query.select(Entity,
+            with: [component_module],
+            partition: partition,
+            changed: [component_module],
+            since: before_cursor
+          )
+
+        assert [_entity] = Query.all(query)
+      end
+    end
+
+    test "keeps cursors correct when independent Mnesia transactions retry concurrently" do
+      results =
+        1..40
+        |> Task.async_stream(
+          fn _index ->
+            partition = make_ref()
+            _existing = spawn_entity(partition: partition, components: [PositionComponent])
+            cursor = Query.cursor(partition)
+            changed = spawn_entity(partition: partition, components: [PositionComponent])
+
+            query =
+              Query.select({Entity, PositionComponent},
+                with: :selected,
+                partition: partition,
+                changed: [PositionComponent],
+                since: cursor
+              )
+
+            Query.all(query) == [{changed, %PositionComponent{}}]
+          end,
+          max_concurrency: 8,
+          ordered: false,
+          timeout: :infinity
+        )
+        |> Enum.to_list()
+
+      assert Enum.all?(results, &match?({:ok, true}, &1))
+    end
+
+    test "does not retain tracked membership from an aborted entity transaction" do
+      tracked_partition = make_ref()
+      untracked_partition = make_ref()
+      entity_id = System.unique_integer([:positive])
+      cursor = Query.cursor(tracked_partition)
+
+      assert {:error, :rollback} =
+               Command.transaction(fn ->
+                 spec =
+                   Entity.entity_spec(
+                     id: entity_id,
+                     partition: tracked_partition,
+                     components: [PositionComponent]
+                   )
+
+                 assert {:ok, {_entity, _components}} = Command.spawn_entity(spec)
+                 Command.abort(:rollback)
+               end)
+
+      entity =
+        spawn_entity(
+          id: entity_id,
+          partition: untracked_partition,
+          components: [PositionComponent]
+        )
+
+      assert {:ok, %PositionComponent{pos_x: 42}} =
+               Command.update_component(entity, PositionComponent, pos_x: 42)
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: tracked_partition,
+          changed: [PositionComponent],
+          since: cursor
+        )
+
+      assert Query.all(query) == []
+    end
+
+    test "keeps changed-component scope correct when an entity changes partition" do
+      first_partition = make_ref()
+      second_partition = make_ref()
+      entity = spawn_entity(partition: first_partition, components: [PositionComponent])
+      first_cursor = Query.cursor(first_partition)
+      second_cursor = Query.cursor(second_partition)
+
+      assert :ok = Command.set_partition(entity, second_partition)
+
+      first_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: first_partition,
+          changed: [PositionComponent],
+          since: first_cursor
+        )
+
+      second_query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: second_partition,
+          changed: [PositionComponent],
+          since: second_cursor
+        )
+
+      assert Query.all(first_query) == []
+      assert Query.all(second_query) == [{entity, %PositionComponent{}}]
+    end
+
+    test "maintains an opt-in membership cache across component changes" do
+      partition = make_ref()
+      first = spawn_entity(partition: partition, components: [PositionComponent])
+
+      query =
+        Query.select({Entity, PositionComponent},
+          with: :selected,
+          partition: partition,
+          cache: true
+        )
+
+      assert Query.all(query) == [{first, %PositionComponent{}}]
+
+      second = spawn_entity(partition: partition, components: [PositionComponent])
+
+      assert Enum.sort(Query.all(query)) ==
+               Enum.sort([{first, %PositionComponent{}}, {second, %PositionComponent{}}])
+
+      assert :ok = Command.delete_component(first, PositionComponent)
+      assert Query.all(query) == [{second, %PositionComponent{}}]
+    end
+
+    test "maintains tracked membership across every component mutation command" do
+      partition = make_ref()
+      entity = spawn_entity(partition: partition, components: [PositionComponent])
+      _cursor = Query.cursor(partition)
+
+      assert {:ok, %PlayerComponent{}} = Command.add_component(entity, PlayerComponent)
+      assert {:ok, %PlayerComponent{}} = Command.add_component(entity, PlayerComponent)
+
+      assert :ok =
+               Command.replace_component(entity, %PositionComponent{pos_x: 7, pos_y: 9})
+
+      first_buff = %BuffComponent{buff_id: 1}
+      second_buff = %BuffComponent{buff_id: 2}
+      assert {:ok, ^first_buff} = Command.add_component(entity, first_buff)
+      assert {:ok, ^second_buff} = Command.add_component(entity, second_buff)
+
+      assert {:ok, :ok} =
+               Command.transaction(fn ->
+                 :ok = Command.delete_component(entity, first_buff)
+                 :ok = Command.delete_component(entity, PlayerComponent)
+               end)
+
+      buff_query =
+        Query.select(BuffComponent,
+          partition: partition,
+          cache: true
+        )
+
+      assert Query.all(buff_query) == [second_buff]
+      assert {:ok, {^entity, _components}} = Command.despawn_entity(entity)
+      assert Query.all(buff_query) == []
+    end
+
     test "candidate sources restrict component reads before materialization" do
       partition = make_ref()
 

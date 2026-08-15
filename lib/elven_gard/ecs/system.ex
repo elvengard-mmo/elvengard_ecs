@@ -55,6 +55,9 @@ defmodule ElvenGard.ECS.System do
             {:elvengard_ecs_system_changes, [ChangeSet.t()]}
             | {:elvengard_ecs_system_changes, [ChangeSet.t()], any()}
 
+  @opaque scheduled_result ::
+            {:elvengard_ecs_system_schedule, non_neg_integer(), any()}
+
   @doc "Runs once per partition tick when implemented."
   @callback run(context :: context()) :: any()
 
@@ -108,8 +111,18 @@ defmodule ElvenGard.ECS.System do
     end)
   end
 
+  @doc "Requests another on-demand partition tick after `delay` milliseconds."
+  @spec schedule_after(non_neg_integer(), any()) :: scheduled_result()
+  def schedule_after(delay, result \\ :ok) when is_integer(delay) and delay >= 0 do
+    {:elvengard_ecs_system_schedule, delay, result}
+  end
+
   @doc false
   @spec emitted_change_sets(any()) :: [ChangeSet.t()]
+  def emitted_change_sets({:elvengard_ecs_system_schedule, _delay, result}) do
+    emitted_change_sets(result)
+  end
+
   def emitted_change_sets({:elvengard_ecs_system_changes, change_sets}) do
     Enum.reject(change_sets, &ChangeSet.empty?/1)
   end
@@ -122,13 +135,23 @@ defmodule ElvenGard.ECS.System do
 
   @doc false
   @spec emitted_output(any()) :: {:ok, any()} | :error
+  def emitted_output({:elvengard_ecs_system_schedule, _delay, result}) do
+    emitted_output(result)
+  end
+
   def emitted_output({:elvengard_ecs_system_changes, _change_sets, output}), do: {:ok, output}
   def emitted_output(_result), do: :error
+
+  @doc false
+  @spec scheduled_after(any()) :: non_neg_integer() | nil
+  def scheduled_after({:elvengard_ecs_system_schedule, delay, _result}), do: delay
+  def scheduled_after(_result), do: nil
 
   @doc false
   defmacro __using__(opts) do
     event_modules = Keyword.get(opts, :event_subscriptions, [])
     locked_components = validate_locks(opts)
+    run_condition = validate_run_condition(opts, __CALLER__)
 
     quote location: :keep do
       @behaviour unquote(__MODULE__)
@@ -136,6 +159,16 @@ defmodule ElvenGard.ECS.System do
 
       def __event_subscriptions__(), do: unquote(event_modules)
       def __lock_components__(), do: unquote(locked_components)
+      def __run_condition__(), do: unquote(run_condition)
+    end
+  end
+
+  @doc false
+  @spec run?(module(), context()) :: boolean()
+  def run?(system, context) when is_atom(system) do
+    case system.__run_condition__() do
+      :always -> true
+      condition -> condition.run?(context)
     end
   end
 
@@ -167,6 +200,22 @@ defmodule ElvenGard.ECS.System do
       value ->
         raise ArgumentError,
               ":lock_components option must be `:sync` or a list of modules, got #{inspect(value)}"
+    end
+  end
+
+  defp validate_run_condition(opts, caller) do
+    opts
+    |> Keyword.get(:run_if, :always)
+    |> Macro.expand(caller)
+    |> case do
+      :always ->
+        :always
+
+      module when is_atom(module) ->
+        module
+
+      value ->
+        raise ArgumentError, ":run_if option must be a condition module, got #{inspect(value)}"
     end
   end
 end
