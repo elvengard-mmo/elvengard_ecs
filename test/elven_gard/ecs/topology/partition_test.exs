@@ -35,7 +35,8 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
         interval: Keyword.get(opts, :interval, 1),
         tick_mode: Keyword.get(opts, :tick_mode, :continuous),
         initial_tick: Keyword.get(opts, :initial_tick, true),
-        concurrency: Keyword.get(opts, :concurrency, System.schedulers_online())
+        concurrency: Keyword.get(opts, :concurrency, System.schedulers_online()),
+        system_timeout: Keyword.get(opts, :system_timeout, :infinity)
       ]
 
       {Keyword.get(opts, :id, :default), args}
@@ -194,6 +195,19 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       case :atomics.add_get(counter, 1, 1) do
         1 -> :ok
         2 -> raise "system failed"
+      end
+    end
+  end
+
+  defmodule BlockingSystem do
+    use ElvenGard.ECS.System, lock_components: :sync
+
+    @impl true
+    def run(%{partition: test_pid}) do
+      send(test_pid, {:blocking_system_started, self()})
+
+      receive do
+        :finish -> :ok
       end
     end
   end
@@ -505,6 +519,30 @@ defmodule ElvenGard.ECS.Topology.PartitionTest do
       capture_log(fn ->
         GenServer.cast(partition, {:events, [event, event]})
         send(partition, :tick)
+        assert Partition.started?(partition)
+      end)
+
+    assert log =~ "1 systems killed/crashed"
+  end
+
+  test "retains task isolation when a finite system timeout is configured", %{source: source} do
+    partition =
+      start_supervised!(
+        {TestPartition,
+         id: self(),
+         event_source: source,
+         systems: [BlockingSystem],
+         interval: 60_000,
+         system_timeout: 10}
+      )
+
+    assert Partition.started?(partition)
+
+    log =
+      capture_log(fn ->
+        send(partition, :tick)
+        assert_receive {:blocking_system_started, system_pid}
+        refute system_pid == partition
         assert Partition.started?(partition)
       end)
 

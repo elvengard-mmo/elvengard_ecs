@@ -139,6 +139,13 @@ The required `:lock_components` option declares scheduling conflicts:
 These locks only control system scheduling. They do not open an ECS transaction
 and do not replace the locking performed by the storage backend.
 
+An isolated batch containing one system runs directly in the partition process
+when `:system_timeout` is `:infinity`. Crashes are still caught and reported,
+while avoiding a Task allocation for work that cannot run concurrently. A
+finite `:system_timeout` retains Task isolation so the scheduler can terminate
+the callback at its deadline. Multi-system batches always retain their
+concurrent Task execution.
+
 ## Define a partition
 
 ```elixir

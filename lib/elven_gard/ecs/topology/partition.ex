@@ -524,15 +524,16 @@ defmodule ElvenGard.ECS.Topology.Partition do
     {batch, remaining} = batch_systems(systems, concurrency)
 
     executions =
-      batch
-      |> Task.async_stream(
-        &execute(&1, delta, id, phase, change_sets, outputs),
-        max_concurrency: concurrency,
-        ordered: true,
-        timeout: system_timeout,
-        on_timeout: :kill_task
+      execute_batch(
+        batch,
+        delta,
+        id,
+        phase,
+        change_sets,
+        outputs,
+        concurrency,
+        system_timeout
       )
-      |> Enum.to_list()
 
     succeed =
       Enum.flat_map(executions, fn
@@ -594,6 +595,40 @@ defmodule ElvenGard.ECS.Topology.Partition do
 
   defp failed_system({system, _event}), do: system
   defp failed_system(system), do: system
+
+  defp execute_batch(
+         [system],
+         delta,
+         partition,
+         phase,
+         change_sets,
+         outputs,
+         _concurrency,
+         :infinity
+       ) do
+    [{:ok, execute(system, delta, partition, phase, change_sets, outputs)}]
+  end
+
+  defp execute_batch(
+         batch,
+         delta,
+         partition,
+         phase,
+         change_sets,
+         outputs,
+         concurrency,
+         system_timeout
+       ) do
+    batch
+    |> Task.async_stream(
+      &execute(&1, delta, partition, phase, change_sets, outputs),
+      max_concurrency: concurrency,
+      ordered: true,
+      timeout: system_timeout,
+      on_timeout: :kill_task
+    )
+    |> Enum.to_list()
+  end
 
   defp acknowledge_receipts([], _failed_systems, _partition), do: :ok
 
